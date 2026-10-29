@@ -12,7 +12,7 @@ export interface SslConfig {
   key?: string;
 }
 
-export interface PgBossConfig {
+export interface DbConfig {
   host: string;
   port: number;
   username: string;
@@ -20,6 +20,9 @@ export interface PgBossConfig {
   database: string;
   schema: string;
   ssl: SslConfig;
+}
+
+export interface PgBossConfig extends DbConfig {
   supervisor: boolean;
   healthCheckTimeoutMs: number;
 }
@@ -63,6 +66,12 @@ export interface TilerConfig {
       waitTimeout: number;
       pgBoss: PgBossConfig;
     };
+    tiling: {
+      contentLevels: number[];
+    };
+  };
+  db: DbConfig & {
+    healthCheckTimeoutMs: number;
   };
 }
 
@@ -74,7 +83,7 @@ export const tilerV1 = {
   title: 'vector3dTilerV1',
   description: '3DTiler worker configuration',
   type: 'object',
-  required: ['telemetry', 'server', 'app'],
+  required: ['telemetry', 'server', 'app', 'db'],
   properties: {
     telemetry: {
       type: 'object',
@@ -105,7 +114,7 @@ export const tilerV1 = {
     },
     app: {
       type: 'object',
-      required: ['project', 'queueName', 'parallelism', 'jobQueue'],
+      required: ['project', 'queueName', 'parallelism', 'jobQueue', 'tiling'],
       properties: {
         project: {
           type: 'object',
@@ -136,7 +145,33 @@ export const tilerV1 = {
             },
           },
         },
+        tiling: {
+          type: 'object',
+          required: ['contentLevels'],
+          properties: {
+            contentLevels: {
+              type: 'array',
+              description: 'The levels that hold content, every building is stored in exactly one tile of one of these levels',
+              items: { type: 'integer', minimum: 0 },
+              minItems: 1,
+              uniqueItems: true,
+            },
+          },
+        },
       },
+    },
+    db: {
+      description: 'The database that holds the buildings table',
+      allOf: [
+        { $ref: 'https://mapcolonies.com/common/db/full/v3' },
+        {
+          type: 'object',
+          required: ['healthCheckTimeoutMs'],
+          properties: {
+            healthCheckTimeoutMs: { type: 'integer', default: 5000, 'x-env-value': 'DB_HEALTH_CHECK_TIMEOUT_MS' },
+          },
+        },
+      ],
     },
   },
 } as const;

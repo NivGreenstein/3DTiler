@@ -44,6 +44,17 @@ interface MetatileTile extends GridTile {
   metatile: number;
 }
 
+/**
+ * A rectangle of grid tiles at one level, the bounds are inclusive.
+ */
+interface TileRange {
+  z: number;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
 const tilesPerAxis = (level: number): number => QUADTREE_FACTOR ** level;
 
 const tileSizeInDegrees = (level: number): number => DEGREES_IN_HEMISPHERE / tilesPerAxis(level);
@@ -140,6 +151,20 @@ const getMetatileContentTiles = (tile: MetatileTile, contentLevels: readonly num
 };
 
 /**
+ * Returns, per content level, the range of content tiles that a metatile job is responsible for.
+ */
+const getMetatileContentRanges = (tile: MetatileTile, contentLevels: readonly number[]): TileRange[] => {
+  const area = metatileToGridTile(tile);
+  return contentLevels.map((level) => {
+    if (level < area.z) {
+      throw new RangeError(`content level ${level} is above the metatile level ${area.z}`);
+    }
+    const span = tilesPerAxis(level - area.z);
+    return { z: level, minX: area.x * span, maxX: (area.x + 1) * span - 1, minY: area.y * span, maxY: (area.y + 1) * span - 1 };
+  });
+};
+
+/**
  * Returns the root of the subtree that contains the implicit tile.
  */
 const getSubtreeRoot = (tile: ImplicitTile, subtreeLevels: number): ImplicitTile => {
@@ -177,6 +202,7 @@ const lonLatToGridTile = (lon: number, lat: number, level: number): GridTile => 
 };
 
 export {
+  getMetatileContentRanges,
   validateGridTile,
   metatileToGridTile,
   gridTileToBoundingBox,
@@ -189,4 +215,4 @@ export {
   getTileCenter,
   lonLatToGridTile,
 };
-export type { GridTile, Hemisphere, ImplicitTile, BoundingBox, MetatileTile };
+export type { TileRange, GridTile, Hemisphere, ImplicitTile, BoundingBox, MetatileTile };

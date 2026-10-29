@@ -177,12 +177,12 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 - [x] Config: `app.queueName`, `app.parallelism`, `app.jobQueue.pgBoss.*`. `db.*`, `app.tiling.*` and `app.tilesStorage.*` are added by the milestones that use them.
 - **Done when:** the worker starts, consumes a dummy queue, and shuts down gracefully. _Verified against a local Postgres 16: a job was fetched, failed with the "not implemented" stub, and SIGTERM drained the queue and ran the cleanup registry._
 
-### M2: DB layer
+### M2: DB layer ✅
 
-- [ ] `common/db/index.ts` in the osm-sync-tracker style: SSL from files, cached `DataSource`, health check (included in liveness together with pg-boss).
-- [ ] `building` entity and `BuildingRepository` with `findByMetatile` and `findContentTilesInSubtree`.
-- [ ] Integration tests against a PostGIS container with fixture buildings (a few Tel Aviv blocks, one with a hole, one multipolygon, one crossing a tile edge).
-- **Done when:** the repository returns the expected rows for a metatile, and `EXPLAIN` shows an index scan.
+- [x] `common/db/index.ts` in the osm-sync-tracker style: SSL from files, cached `DataSource`, health check (included in liveness together with pg-boss).
+- [x] `building` entity and `BuildingRepository.findByTileRanges` (one range per content level, from `getMetatileContentRanges`). `findContentTilesInSubtree` comes with M7.
+- [x] Integration tests against PostGIS (a `postgis/postgis` service in CI), using the same DDL as the import.
+- **Done when:** the repository returns the expected rows for a metatile, and `EXPLAIN` shows an index scan. _Verified on the imported 3DBAG tile: a bitmap OR of index scans on `buildings_tile_idx`, 570 rows for the densest z13 area._
 
 ### M3: Tiling math ✅
 
@@ -208,6 +208,8 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 
 ### M6: End-to-end tile job (the design's **Phase 2 gate**)
 
+> **Job size.** metatile-queue-populator sends jobs with `metatile = 8`, which is an 8×8 block of tiles at the job zoom `z`, or one tile at `z − 3`. With content at z14/z15, a job at `z = 16` covers one z13 tile: 4 + 16 = 20 GLBs. A job at `z = 14` covers a z11 tile: 64 + 256 = 320 GLBs, and one query could return tens of thousands of buildings in a city. The processor therefore queries and encodes **one content tile range at a time**, never the whole job in memory. The populator zoom is a tuning setting.
+
 - [ ] Port the storage providers (S3 and FS). Add `ContentType` (`model/gltf-binary`, `application/octet-stream` for `.subtree`, `application/json`) and a layout template per artifact type.
 - [ ] `TileProcessor.processMetatile` with tracing spans, metrics (`3dtiler_tiles_count`, duration histogram by kind `query|mesh|encode|store|delete`), and empty-tile deletion.
 - [ ] A one-off command that writes the static `tileset.json` (§1.1).
@@ -230,12 +232,13 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 
 ### Parallel track D: Data
 
-**D1: 3DBAG import (first)**
+**D1: 3DBAG import (first)** ✅
 
-- [ ] `scripts/import-3dbag.sh`: `ogr2ogr` of `lod22_3d` joined with the `pand` attributes into `buildings`, from EPSG:7415 to **EPSG:4979**, with the RDNAPTRANS and NLGEO2018 grids. The script fails if `projinfo` shows that it would use a ballpark transform.
-- [ ] Check one building against its known NAP height + geoid undulation (about 43 m).
-- [ ] A SQL step that fills `tile_z`, `tile_x`, `tile_y` (WorldCRS84Quad, y from the north, the same as `grid.ts`) from the footprint centroid, and `meta_x`, `meta_y` from the tile indices. Then index `(meta_x, meta_y)`.
-- [ ] The table contract the worker reads: `id text`, `geom geometry(MultiPolygonZ, 4979)`, `height real`, `tile_z/x/y int`, `meta_x/y int`, plus attribute columns.
+- [x] `scripts/3dbag/import.sh`: `ogr2ogr` loads `pand` and `lod22_3d` into a staging schema in their native EPSG:7415. `upsert_3dbag.sql` then upserts them into `buildings` in **EPSG:4979** with PostGIS `ST_Transform`.
+- [x] Geoid guard: without `nl_nsgi_nlgeo2018.tif`, PostGIS returns NAP 0 m at the RD origin as 0 m instead of 43.28 m, with no error. The upsert checks that point and aborts.
+- [x] Tile columns `tile_z`, `tile_x`, `tile_y` (WorldCRS84Quad, y from the north, the same as `grid.ts`) come from the `pand` footprint centroid, with an index on `(tile_z, tile_x, tile_y)`. **Change from the design:** there are no `meta_x`/`meta_y` columns. The worker turns a job into one tile range per content level, so the metatile size can change without re-importing.
+- [x] Table contract (`scripts/3dbag/buildings.sql`): one row per building part, with `id`, `building_id`, `source`, `geom geometry(MultiPolygonZ, 4979)`, `face_labels smallint[]` (0 ground, 1 roof, 2 wall), `ground_height`, `height`, `footprint_area`, `construction_year`, `roof_type` and the tile columns.
+- Tile `8-688-40` (Valkenburg, Limburg): 1,003 parts from 1,002 buildings. 23 are at z14 and 980 at z15, spread over 24 content tiles in 5 z13 areas. Ellipsoidal ground heights are 115–176 m.
 
 **D2: OSM (osm2pgsql flex, later)**
 
@@ -263,6 +266,6 @@ Resolved:
 
 Still open:
 
-1. **SFCGAL on the target PostGIS:** it is no longer required. Check it anyway with `SELECT postgis_full_version();`.
-2. **Client terrain:** which terrain Cesium will use. It does not block 3DBAG (§1.4), but it does block `base_h` for OSM.
+1. **SFCGAL:** not needed, because geometry is built in Node. It was only needed for the design's SQL extrusion (`CG_Extrude`, `CG_Tesselate`).
+2. **Client terrain:** postponed. It does not block 3DBAG (§1.4), but it does block `base_h` for OSM.
 3. **Content levels:** z14/z15 with the halved WorldCRS84Quad tiles, or z13/z14. This will be decided from the tile sizes measured at the M6 gate.

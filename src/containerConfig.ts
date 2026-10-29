@@ -8,6 +8,7 @@ import { Registry } from 'prom-client';
 import { trace } from '@opentelemetry/api';
 import { CleanupRegistry } from '@map-colonies/cleanup-registry';
 import type { PgBoss } from 'pg-boss';
+import type { DataSource } from 'typeorm';
 import {
   CONSUME_AND_PROCESS_FACTORY,
   HEALTHCHECK,
@@ -23,6 +24,8 @@ import {
 import { type InjectionObject, registerDependencies } from '@common/dependencyRegistration';
 import { getTracing } from '@common/tracing';
 import { type ConfigType, getConfig } from '@common/config';
+import { DATA_SOURCE_PROVIDER, dataSourceFactory, getDbHealthCheckFunction } from '@common/db';
+import { buildingRepositoryFactory, BUILDING_CUSTOM_REPOSITORY_SYMBOL } from './building/DAL/buildingRepository';
 import type { JobQueueProvider } from './tiler/interfaces';
 import { PgBossJobQueueProvider } from './tiler/jobQueueProvider/pgBossJobQueue';
 import { getPgBossHealthCheckFunction, pgBossFactory } from './tiler/jobQueueProvider/pgbossFactory';
@@ -101,6 +104,18 @@ export const registerExternalValues = async (options?: RegisterOptions): Promise
         },
       },
       {
+        token: DATA_SOURCE_PROVIDER,
+        provider: { useFactory: instancePerContainerCachingFactory(dataSourceFactory) },
+        postInjectionHook: async (deps: DependencyContainer): Promise<void> => {
+          const dataSource = deps.resolve<DataSource>(DATA_SOURCE_PROVIDER);
+          if (!dataSource.isInitialized) {
+            await dataSource.initialize();
+            cleanupRegistry.register({ id: DATA_SOURCE_PROVIDER, func: dataSource.destroy.bind(dataSource) });
+          }
+        },
+      },
+      { token: BUILDING_CUSTOM_REPOSITORY_SYMBOL, provider: { useFactory: buildingRepositoryFactory } },
+      {
         token: SERVICES.PGBOSS,
         provider: {
           useFactory: instancePerContainerCachingFactory((container) => {
@@ -154,9 +169,13 @@ export const registerExternalValues = async (options?: RegisterOptions): Promise
         provider: {
           useFactory: (depContainer): HealthCheck => {
             const pgboss = depContainer.resolve<PgBoss>(SERVICES.PGBOSS);
+            const dataSource = depContainer.resolve<DataSource>(DATA_SOURCE_PROVIDER);
             const config = depContainer.resolve<ConfigType>(SERVICES.CONFIG);
-            const timeoutMs = config.get('app.jobQueue.pgBoss.healthCheckTimeoutMs');
-            return getPgBossHealthCheckFunction(pgboss, timeoutMs);
+            const pgBossHealthCheck = getPgBossHealthCheckFunction(pgboss, config.get('app.jobQueue.pgBoss.healthCheckTimeoutMs'));
+            const dbHealthCheck = getDbHealthCheckFunction(dataSource, config.get('db.healthCheckTimeoutMs'));
+            return async (state): Promise<void> => {
+              await Promise.all([pgBossHealthCheck(state), dbHealthCheck(state)]);
+            };
           },
         },
       },

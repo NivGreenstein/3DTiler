@@ -40,6 +40,21 @@
         "supervisor": true,
         "healthCheckTimeoutMs": 5000
       }
+    },
+    "tiling": {
+      "contentLevels": [14, 15]
     }
+  },
+  "db": {
+    "host": "localhost",
+    "port": 5432,
+    "username": "postgres",
+    "password": "postgres",
+    "ssl": {
+      "enabled": false
+    },
+    "database": "postgres",
+    "schema": "public",
+    "healthCheckTimeoutMs": 5000
   }
 }
