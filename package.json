@@ -47,11 +47,13 @@
     "tsyringe": "^4.8.0"
   },
   "devDependencies": {
+    "@cesium/engine": "^22.3.0",
     "@commitlint/cli": "^21.2.2",
     "@map-colonies/commitlint-config": "^2.0.1",
     "@map-colonies/eslint-config": "^9.0.0",
     "@map-colonies/eslint-plugin": "^1.0.0",
     "@map-colonies/prettier-config": "^1.0.0",
+    "@map-colonies/tile-calc": "^0.1.5",
     "@map-colonies/tsconfig": "^2.0.0",
     "@types/express": "^4.17.21",
     "@vitest/coverage-v8": "^4.1.10",
