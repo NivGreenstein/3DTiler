@@ -13,7 +13,7 @@ export class BuildingDb {
   @Column({ type: 'text' })
   public source!: string;
 
-  @Column({ type: 'geometry', spatialFeatureType: 'MultiPolygonZ', srid: 4979, select: false })
+  @Column({ type: 'geometry', spatialFeatureType: 'MultiPolygonZ', srid: 4326, select: false })
   public geom!: unknown;
 
   @Column({ name: 'face_labels', type: 'smallint', array: true, nullable: true })

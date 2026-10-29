@@ -10,7 +10,7 @@ export enum FaceLabel {
 /* eslint-enable @typescript-eslint/no-magic-numbers */
 
 /**
- * A building (or building part) as read for tiling, its geometry is WKB in EPSG:4979.
+ * A building (or building part) as read for tiling, its geometry is WKB in EPSG:4326 with Z as the ellipsoidal height in meters.
  */
 export interface BuildingRecord {
   id: string;

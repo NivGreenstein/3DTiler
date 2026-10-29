@@ -13,6 +13,10 @@ export const JOB_QUEUE_PROVIDER = Symbol('JobQueueProvider');
 export const CONSUME_AND_PROCESS_FACTORY = Symbol('ConsumeAndProcessFactory');
 
 export const QUEUE_NAME = Symbol('QueueName');
+export const QUEUE_CREATE_OPTIONS = Symbol('QueueCreateOptions');
+export const GEOMETRY_BUILDER = Symbol('GeometryBuilder');
+export const TILES_STORAGE = Symbol('TilesStorage');
+export const SUBTREE_JOB_QUEUE = Symbol('SubtreeJobQueue');
 export const QUEUE_EMPTY_TIMEOUT = Symbol('QueueTimeout');
 export const METRICS_REGISTRY = Symbol('MetricsRegistry');
 export const METRICS_BUCKETS = Symbol('MetricsBuckets');

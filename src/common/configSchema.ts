@@ -27,6 +27,23 @@ export interface PgBossConfig extends DbConfig {
   healthCheckTimeoutMs: number;
 }
 
+export type AppMode = 'tiles' | 'subtrees';
+export type GeometryBuilderKind = 'node' | 'postgis';
+
+export interface FsTilesStorageConfig {
+  kind: 'fs';
+  basePath: string;
+}
+
+export interface TilingConfig {
+  contentLevels: number[];
+  subtreeLevels: number;
+  geometryBuilder: GeometryBuilderKind;
+  rootGeometricError: number;
+  minHeight: number;
+  maxHeight: number;
+}
+
 export interface TilerConfig {
   telemetry: {
     shared: {
@@ -60,15 +77,18 @@ export interface TilerConfig {
     project: {
       name: string;
     };
+    mode: AppMode;
     queueName: string;
     parallelism: number;
+    subtrees: {
+      queueName: string;
+    };
     jobQueue: {
       waitTimeout: number;
       pgBoss: PgBossConfig;
     };
-    tiling: {
-      contentLevels: number[];
-    };
+    tiling: TilingConfig;
+    tilesStorage: FsTilesStorageConfig;
   };
   db: DbConfig & {
     healthCheckTimeoutMs: number;
@@ -114,7 +134,7 @@ export const tilerV1 = {
     },
     app: {
       type: 'object',
-      required: ['project', 'queueName', 'parallelism', 'jobQueue', 'tiling'],
+      required: ['project', 'mode', 'queueName', 'parallelism', 'subtrees', 'jobQueue', 'tiling', 'tilesStorage'],
       properties: {
         project: {
           type: 'object',
@@ -123,7 +143,26 @@ export const tilerV1 = {
             name: { type: 'string', description: 'Project name', 'x-env-value': 'APP_PROJECT_NAME' },
           },
         },
-        queueName: { type: 'string', description: 'Job queue name', default: '3dtiler-queue', 'x-env-value': 'QUEUE_NAME' },
+        mode: {
+          enum: ['tiles', 'subtrees'],
+          description: 'tiles consumes metatile jobs and writes content, subtrees consumes subtree jobs and writes availability',
+          default: 'tiles',
+          'x-env-value': 'APP_MODE',
+        },
+        queueName: { type: 'string', description: 'The metatile job queue name', default: '3dtiler-queue', 'x-env-value': 'QUEUE_NAME' },
+        subtrees: {
+          type: 'object',
+          default: {},
+          required: ['queueName'],
+          properties: {
+            queueName: {
+              type: 'string',
+              description: 'The subtree job queue name',
+              default: '3dtiler-subtrees',
+              'x-env-value': 'SUBTREES_QUEUE_NAME',
+            },
+          },
+        },
         parallelism: { type: 'integer', minimum: 1, description: 'Number of parallel jobs', default: 1, 'x-env-value': 'APP_PARALLELISM' },
         jobQueue: {
           type: 'object',
@@ -131,24 +170,52 @@ export const tilerV1 = {
           properties: {
             waitTimeout: { type: 'integer', description: 'Job queue wait timeout in milliseconds', 'x-env-value': 'QUEUE_WAIT_TIMEOUT' },
             pgBoss: {
-              allOf: [
-                { $ref: 'https://mapcolonies.com/common/db/full/v3' },
-                {
+              // not the shared db schema: its DB_* environment variables would collide with the ones of the buildings db below
+              type: 'object',
+              required: ['host', 'port', 'username', 'password', 'database', 'schema', 'ssl', 'healthCheckTimeoutMs'],
+              properties: {
+                host: { type: 'string', default: 'localhost', 'x-env-value': 'PGBOSS_HOST' },
+                port: { type: 'integer', default: 5432, 'x-env-value': 'PGBOSS_PORT' },
+                username: { type: 'string', default: 'postgres', 'x-env-value': 'PGBOSS_USERNAME' },
+                password: { type: 'string', default: 'postgres', 'x-env-value': 'PGBOSS_PASSWORD' },
+                database: { type: 'string', default: 'postgres', 'x-env-value': 'PGBOSS_NAME' },
+                schema: { type: 'string', default: 'pgboss', 'x-env-value': 'PGBOSS_SCHEMA' },
+                ssl: {
                   type: 'object',
-                  required: ['healthCheckTimeoutMs'],
+                  default: {},
+                  required: ['enabled'],
                   properties: {
-                    supervisor: { type: 'boolean', default: true, 'x-env-value': 'PGBOSS_ENABLE_SUPERVISOR' },
-                    healthCheckTimeoutMs: { type: 'integer', 'x-env-value': 'PGBOSS_HEALTH_CHECK_TIMEOUT_MS' },
+                    enabled: { type: 'boolean', default: false, 'x-env-value': 'PGBOSS_ENABLE_SSL_AUTH' },
+                    ca: { type: 'string', 'x-env-value': 'PGBOSS_CA_PATH' },
+                    cert: { type: 'string', 'x-env-value': 'PGBOSS_CERT_PATH' },
+                    key: { type: 'string', 'x-env-value': 'PGBOSS_KEY_PATH' },
                   },
                 },
-              ],
+                supervisor: { type: 'boolean', default: true, 'x-env-value': 'PGBOSS_ENABLE_SUPERVISOR' },
+                healthCheckTimeoutMs: { type: 'integer', 'x-env-value': 'PGBOSS_HEALTH_CHECK_TIMEOUT_MS' },
+              },
             },
           },
         },
         tiling: {
           type: 'object',
-          required: ['contentLevels'],
+          required: ['contentLevels', 'subtreeLevels', 'geometryBuilder', 'rootGeometricError', 'minHeight', 'maxHeight'],
           properties: {
+            subtreeLevels: { type: 'integer', minimum: 1, default: 8, description: 'The number of levels in every subtree' },
+            geometryBuilder: {
+              enum: ['node', 'postgis'],
+              default: 'node',
+              description: 'Where meshes are built: node triangulates in the worker, postgis uses SFCGAL and ST_TransformPipeline',
+              'x-env-value': 'TILING_GEOMETRY_BUILDER',
+            },
+            rootGeometricError: {
+              type: 'number',
+              exclusiveMinimum: 0,
+              default: 800000,
+              description: 'The geometric error of the hemisphere roots, in meters',
+            },
+            minHeight: { type: 'number', default: -500, description: 'The lowest ellipsoidal height of the content, in meters' },
+            maxHeight: { type: 'number', default: 6000, description: 'The highest ellipsoidal height of the content, in meters' },
             contentLevels: {
               type: 'array',
               description: 'The levels that hold content, every building is stored in exactly one tile of one of these levels',
@@ -156,6 +223,14 @@ export const tilerV1 = {
               minItems: 1,
               uniqueItems: true,
             },
+          },
+        },
+        tilesStorage: {
+          type: 'object',
+          required: ['kind', 'basePath'],
+          properties: {
+            kind: { const: 'fs' },
+            basePath: { type: 'string', description: 'The directory the tileset is written to', 'x-env-value': 'TILES_STORAGE_FS_BASE_PATH' },
           },
         },
       },

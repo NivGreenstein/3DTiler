@@ -2,12 +2,12 @@ import { EventEmitter } from 'node:events';
 import { setTimeout as setTimeoutPromise } from 'node:timers/promises';
 import { Registry, Gauge } from 'prom-client';
 import { type Logger } from '@map-colonies/js-logger';
-import { PgBoss, type JobWithMetadata } from 'pg-boss';
+import { PgBoss, type JobWithMetadata, type Queue } from 'pg-boss';
 import { inject, injectable } from 'tsyringe';
 import { serializeError } from 'serialize-error';
 import { type Tracer, SpanStatusCode } from '@opentelemetry/api';
 import { jobAttributes, spanName } from '@common/tracing/job';
-import { METRICS_REGISTRY, QUEUE_EMPTY_TIMEOUT, QUEUE_NAME, SERVICES } from '@common/constants';
+import { METRICS_REGISTRY, QUEUE_CREATE_OPTIONS, QUEUE_EMPTY_TIMEOUT, QUEUE_NAME, SERVICES } from '@common/constants';
 import { JobQueueProvider } from '../interfaces';
 
 @injectable()
@@ -25,7 +25,8 @@ export class PgBossJobQueueProvider implements JobQueueProvider {
     @inject(SERVICES.TRACER) private readonly tracer: Tracer,
     @inject(QUEUE_NAME) private readonly queueName: string,
     @inject(QUEUE_EMPTY_TIMEOUT) private readonly queueWaitTimeout: number,
-    @inject(METRICS_REGISTRY) registry?: Registry
+    @inject(METRICS_REGISTRY) registry?: Registry,
+    @inject(QUEUE_CREATE_OPTIONS) private readonly queueCreateOptions: Omit<Queue, 'name'> = {}
   ) {
     if (registry !== undefined) {
       // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -55,7 +56,7 @@ export class PgBossJobQueueProvider implements JobQueueProvider {
       this.logger.error({ err, msg: 'pgboss error' });
     });
     await this.pgBoss.start();
-    await this.pgBoss.createQueue(this.queueName);
+    await this.pgBoss.createQueue(this.queueName, this.queueCreateOptions);
     this.logger.debug({ msg: 'pgboss started' });
   }
 

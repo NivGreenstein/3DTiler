@@ -1,5 +1,5 @@
--- The table the 3DTiler worker reads. Every source (3DBAG now, OSM later) is loaded into it in EPSG:4979
--- (longitude, latitude, ellipsoidal height), with the content tile of every building already assigned.
+-- The table the 3DTiler worker reads. Every source is loaded into it in EPSG:4326 (longitude, latitude), with Z as the
+-- height in meters above the WGS84 ellipsoid, and with the content tile of every building already assigned.
 -- psql variables: schema
 CREATE SCHEMA IF NOT EXISTS :"schema";
 
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS :"schema".buildings (
   id text PRIMARY KEY,
   building_id text NOT NULL,
   source text NOT NULL,
-  geom geometry(MultiPolygonZ, 4979) NOT NULL,
+  geom geometry(MultiPolygonZ, 4326) NOT NULL,
   -- the semantic label of every face of geom, in order: 0 ground, 1 roof, 2 outer wall (3DBAG / CityJSON semantics)
   face_labels smallint[],
   ground_height real NOT NULL,

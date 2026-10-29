@@ -46,7 +46,7 @@ describe('PgBossJobQueueProvider', () => {
     it('should start queue provider and create the queue', async () => {
       await expect(provider.startQueue()).resolves.not.toThrow();
       expect(pgbossMock.start).toHaveBeenCalledTimes(1);
-      expect(pgbossMock.createQueue).toHaveBeenCalledWith('queue-name');
+      expect(pgbossMock.createQueue).toHaveBeenCalledWith('queue-name', {});
     });
 
     it('should throw if trying to start a started queue', async () => {

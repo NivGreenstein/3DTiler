@@ -23,8 +23,12 @@
     "project": {
       "name": "default"
     },
+    "mode": "tiles",
     "queueName": "3dtiler-queue",
     "parallelism": 1,
+    "subtrees": {
+      "queueName": "3dtiler-subtrees"
+    },
     "jobQueue": {
       "waitTimeout": 5000,
       "pgBoss": {
@@ -42,7 +46,16 @@
       }
     },
     "tiling": {
-      "contentLevels": [14, 15]
+      "contentLevels": [14, 15],
+      "subtreeLevels": 8,
+      "geometryBuilder": "node",
+      "rootGeometricError": 800000,
+      "minHeight": -500,
+      "maxHeight": 6000
+    },
+    "tilesStorage": {
+      "kind": "fs",
+      "basePath": "./tiles"
     }
   },
   "db": {

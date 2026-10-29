@@ -151,17 +151,34 @@ const getMetatileContentTiles = (tile: MetatileTile, contentLevels: readonly num
 };
 
 /**
+ * Returns the range of the descendants of the tile at the given level.
+ */
+const getDescendantRange = (tile: GridTile, level: number): TileRange => {
+  if (level < tile.z) {
+    throw new RangeError(`level ${level} is above the tile level ${tile.z}`);
+  }
+  const span = tilesPerAxis(level - tile.z);
+  return { z: level, minX: tile.x * span, maxX: (tile.x + 1) * span - 1, minY: tile.y * span, maxY: (tile.y + 1) * span - 1 };
+};
+
+/**
  * Returns, per content level, the range of content tiles that a metatile job is responsible for.
  */
 const getMetatileContentRanges = (tile: MetatileTile, contentLevels: readonly number[]): TileRange[] => {
   const area = metatileToGridTile(tile);
-  return contentLevels.map((level) => {
-    if (level < area.z) {
-      throw new RangeError(`content level ${level} is above the metatile level ${area.z}`);
-    }
-    const span = tilesPerAxis(level - area.z);
-    return { z: level, minX: area.x * span, maxX: (area.x + 1) * span - 1, minY: area.y * span, maxY: (area.y + 1) * span - 1 };
-  });
+  return contentLevels.map((level) => getDescendantRange(area, level));
+};
+
+/**
+ * Returns the roots of every subtree that holds tiles of the area, from the hemisphere root down to the deepest level.
+ */
+const getSubtreeRootsOfArea = (area: GridTile, deepestLevel: number, subtreeLevels: number): ImplicitTile[] => {
+  const roots: ImplicitTile[] = [];
+  for (let level = 0; level <= deepestLevel; level += subtreeLevels) {
+    const tiles = level <= area.z ? [getAncestorAtLevel(area, level)] : getDescendantsAtLevel(area, level);
+    roots.push(...tiles.map(gridToImplicit));
+  }
+  return roots;
 };
 
 /**
@@ -202,6 +219,8 @@ const lonLatToGridTile = (lon: number, lat: number, level: number): GridTile => 
 };
 
 export {
+  getDescendantRange,
+  getSubtreeRootsOfArea,
   getMetatileContentRanges,
   validateGridTile,
   metatileToGridTile,

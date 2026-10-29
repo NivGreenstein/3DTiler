@@ -1,29 +1,17 @@
--- Moves one loaded 3DBAG tile from the staging schema into the buildings table.
+-- Moves one loaded 3DBAG tile from the staging schema (already converted to EPSG:4979 by ogr2ogr) into the buildings table.
 -- psql variables: schema, staging_schema, large_height (m), large_area (m2), large_level, small_level
 BEGIN;
-
--- PROJ silently keeps NAP heights when the NLGEO2018 geoid grid is missing, so check a known point first:
--- NAP 0 m at the RD origin is about 43.28 m above the WGS84 ellipsoid.
-DO $$
-DECLARE
-  h double precision := ST_Z(ST_Transform(ST_SetSRID(ST_MakePoint(155000, 463000, 0), 7415), 4979));
-BEGIN
-  IF abs(h - 43.277) > 0.01 THEN
-    RAISE EXCEPTION 'EPSG:7415 to EPSG:4979 gave a height of % m at the RD origin instead of 43.277 m, install the PROJ grids nl_nsgi_nlgeo2018.tif and nl_nsgi_rdtrans2018.tif', h;
-  END IF;
-END
-$$;
 
 WITH parts AS (
   SELECT
     l.identificatie || '-' || l.b3_pand_deel_id AS id,
     l.identificatie AS building_id,
-    ST_Transform(l.geom, 4979) AS geom,
+    ST_SetSRID(l.geom, 4326) AS geom,
     string_to_array(split_part(btrim(l.labels, '()'), ':', 2), ',')::smallint[] AS face_labels,
     p.b3_opp_grond AS footprint_area,
     p.oorspronkelijkbouwjaar::smallint AS construction_year,
     p.b3_dak_type AS roof_type,
-    ST_Transform(ST_Centroid(p.geom), 4326) AS centroid
+    ST_Centroid(ST_Force2D(p.geom)) AS centroid
   FROM :"staging_schema".lod22_3d l
   JOIN :"staging_schema".pand p USING (identificatie)
 ),

@@ -7,8 +7,12 @@ export const jobAttributes = {
   TILE_METATILE: 'tile.metatile',
   TILE_FORCE: 'tile.force',
   TILE_STATE: 'tile.state',
+  TILE_STATUS: 'tile.status',
+  TILE_FEATURES: 'tile.features',
 } satisfies Record<string, string>;
 
 export const spanName = {
   JOB_PROCESS: 'job.process',
+  METATILE_PROCESS: 'metatile.process',
+  CONTENT_TILE_PROCESS: 'content_tile.process',
 } satisfies Record<string, string>;
