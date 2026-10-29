@@ -28,16 +28,23 @@ The content URIs differ only by prefix: `content/{h}/{level}/{x}/{y}.glb` and `s
 
 **Side effect:** tiles are half as wide as in the design at the same level. A CRS84Quad z15 tile is about 0.6×0.6 km at the equator. We either keep z14/z15 as content levels (smaller tiles, which helps the dense-tile size target) or move them to z13/z14. This is a tuning setting.
 
-### 1.2 Build the geometry in Node, not in SQL (recommended)
+### 1.2 Build the geometry in Node, not in SQL (decided)
 
 The design runs `CG_Extrude`, `CG_Tesselate` and `ST_TransformPipeline` per row. That requires SFCGAL, which managed or Crunchy PostGIS images often don't ship, plus PostGIS 3.4 or later. It also builds a PROJ pipeline string per row, which PostGIS does not cache, and it spends CPU on the database that osm2pgsql and pg-boss also use.
 
 pg2b3dm triangulates in code. We do the same:
 
-- **SQL** returns only: `osm_id`, footprint WKB (4326), `height`, `min_height`, base elevation, the tile columns, and attributes.
-- **Node** does geodetic → ECEF → ENU in float64, builds walls as quads, triangulates roofs and floors with `earcut`, and computes flat normals.
+- **SQL** returns only plain rows for the metatile: the id, the geometry as WKB in EPSG:4979 (lon, lat, ellipsoidal height), the tile columns, and the attributes.
+- **Node** converts every vertex to the tile's ENU frame in float64, triangulates, and computes flat normals.
 
-This is about 200 lines of pure, unit-testable code. Workers scale horizontally and the database does index lookups only. The SQL path can come back later behind a `geometryBuilder: 'sql' | 'node'` setting if we want it.
+The mesh builder supports two kinds of input, so both data sources go through the same worker:
+
+| Source              | Geometry in the table                                          | What Node does                                                                          |
+| ------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **3DBAG** (first)   | `MultiPolygonZ` of planar 3D faces (walls, roof parts, ground) | Triangulate each face: Newell normal, project onto the face plane, `earcut` with holes. |
+| **OSM** (osm2pgsql) | 2D footprint `MultiPolygon` + `height`, `min_height`, `base_h` | Extrude: walls as quads, roof and floor with `earcut`, then the same path as above.     |
+
+This is a few hundred lines of pure, unit-testable code. Workers scale horizontally and the database does index lookups only.
 
 ### 1.3 Smaller fixes
 
@@ -52,7 +59,26 @@ This is about 200 lines of pure, unit-testable code. Workers scale horizontally 
 | Content outside tile bounds | A building whose centroid is in a tile can stick out past the tile's region. This is acceptable for the MVP because buildings are small next to the tile. If culling pops at edges, add `TILE_BOUNDING_REGION` metadata to the subtrees later. |
 | Empty tiles                 | When an update leaves a tile empty, **delete** its GLB and clear its availability (the same as retiler's `deleteBlankTiles`).                                                                                                                  |
 
-### 1.4 GLB node transform (confirming the design)
+### 1.4 First data source: 3DBAG
+
+The first dataset is a [3DBAG](https://3dbag.nl) tile GeoPackage (tile `8-688-40`). This changes the data phase: 3DBAG already contains full 3D buildings with absolute heights, so there is no extrusion and no DEM for it.
+
+What we expect in the GeoPackage (to verify on the file, the session could not download it):
+
+- Layers `pand` (attributes and 2D footprint) and `lod12_3d`, `lod13_3d`, `lod22_3d` (3D geometry, one `MultiPolygonZ` of faces per building part). We start with **LoD 2.2**.
+- CRS **EPSG:7415**: RD New (EPSG:28992) horizontally and NAP heights (EPSG:5709) vertically.
+- Building id `identificatie` (a string such as `NL.IMBAG.Pand.0503100000012345`), plus attributes such as `b3_h_maaiveld` (ground height), `b3_dak_type` and `oorspronkelijkbouwjaar`.
+
+Converting to EPSG:4979 needs **two PROJ grids**, or heights and positions come out wrong without any error:
+
+- `nl_nsgi_rdtrans2018.tif` (RDNAPTRANS) for RD → ETRS89 horizontally, which is accurate to about 1 cm instead of about 1 m.
+- `nl_nsgi_nlgeo2018.tif` (the NLGEO2018 geoid) for NAP → ellipsoidal height. It adds about **+43 m**. Without it PROJ falls back to a ballpark transform that keeps the NAP height, and buildings end up about 43 m too low.
+
+The import (track D) converts once, at load time, with `ogr2ogr -t_srs EPSG:4979` and `PROJ_NETWORK=ON` (or the grids installed locally). It then fills the tile columns in SQL, so the worker only ever reads EPSG:4979.
+
+**Terrain:** 3DBAG heights are absolute, so buildings land at the right ellipsoidal height whatever the client shows. With Cesium's default ellipsoid (no terrain) they look about 43 m above the globe surface in the Netherlands. With a terrain in ellipsoidal heights (Cesium World Terrain or an equivalent) they sit on the ground. For OSM later, `base_h` must come from the same DEM as the client terrain.
+
+### 1.5 GLB node transform (confirming the design)
 
 Positions are ENU, with z up. Cesium applies Y-up→Z-up to all glTF content, so the root node matrix is `Z_UP_TO_Y_UP × ENU_TO_ECEF(center)`. The two axis swaps cancel, and the final position is `ENU_TO_ECEF × p`. Each GLB contains everything it needs to be placed, which implicit tiling requires.
 
@@ -139,17 +165,17 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 
 ### M0: Decisions and data contract _(blocks M2)_
 
-- [ ] Resolve the open questions in §4.
-- [ ] Freeze the `buildings` table contract: columns, types, SRID, indexes.
-- [ ] Get or register a config schema in `@map-colonies/schemas` (see §4).
+- [x] Resolve the open questions in §4 (grid, geometry in Node, local config schema, metatile-queue-populator).
+- [ ] Freeze the `buildings` table contract: columns, types, SRID, indexes (§D).
+- [x] Config schema: a local schema (`src/common/configSchema.ts`) loaded in offline mode. It reuses the shared db and telemetry schemas from `@map-colonies/schemas` by `$ref`.
 
-### M1: Worker skeleton
+### M1: Worker skeleton ✅
 
-- [ ] Remove the boilerplate REST resources, OpenAPI router and `serverBuilder`. Keep vitest, eslint, prettier, husky, Dockerfile and helm.
-- [ ] Port from retiler: `index.ts` (terminus liveness, `/metrics`), `CleanupRegistry`, `ON_SIGNAL`, and `postInjectionHook` / `afterAllInjectionHook` in `dependencyRegistration.ts`.
-- [ ] Port `PgBossJobQueueProvider` and `pgbossFactory` (pg-boss 12) with their unit tests, converted from jest to vitest.
-- [ ] Config: `app.queueName`, `app.parallelism`, `app.jobQueue.pgBoss.*`, `db.*`, `app.tiling.*`, `app.tilesStorage.*`.
-- **Done when:** the worker starts, consumes a dummy queue, and shuts down gracefully.
+- [x] Remove the boilerplate REST resources, OpenAPI router and `serverBuilder`. Keep vitest, eslint, prettier, husky, Dockerfile and helm.
+- [x] Port from retiler: `index.ts` (terminus liveness, `/metrics`), `CleanupRegistry`, `ON_SIGNAL`, and `postInjectionHook` / `afterAllInjectionHook` in `dependencyRegistration.ts`.
+- [x] Port `PgBossJobQueueProvider` and `pgbossFactory` (pg-boss 12) with their unit tests, converted from jest to vitest.
+- [x] Config: `app.queueName`, `app.parallelism`, `app.jobQueue.pgBoss.*`. `db.*`, `app.tiling.*` and `app.tilesStorage.*` are added by the milestones that use them.
+- **Done when:** the worker starts, consumes a dummy queue, and shuts down gracefully. _Verified against a local Postgres 16: a job was fetched, failed with the "not implemented" stub, and SIGTERM drained the queue and ran the cleanup registry._
 
 ### M2: DB layer
 
@@ -158,18 +184,20 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 - [ ] Integration tests against a PostGIS container with fixture buildings (a few Tel Aviv blocks, one with a hole, one multipolygon, one crossing a tile edge).
 - **Done when:** the repository returns the expected rows for a metatile, and `EXPLAIN` shows an index scan.
 
-### M3: Tiling math _(pure, can run in parallel with M2)_
+### M3: Tiling math ✅
 
-- [ ] `grid.ts`: hemisphere mapping, y flip, tile bounds in radians, `metatileToContentTiles`, `contentTileToSubtree`.
-- [ ] `enu.ts`: WGS84 geodetic→ECEF, ENU basis, column-major node matrix including Z_UP_TO_Y_UP.
-- [ ] Tests: compare against `cesium` (devDependency) `Cartesian3.fromDegrees`, `Transforms.eastNorthUpToFixedFrame` and `Axis.Z_UP_TO_Y_UP` to within 1e-6.
+- [x] `grid.ts`: hemisphere mapping, y flip, tile bounds, `getMetatileContentTiles`, `getSubtreeRoot`, `lonLatToGridTile`.
+- [x] `enu.ts`: WGS84 geodetic→ECEF, ENU basis, column-major node matrix including Z_UP_TO_Y_UP.
+- [x] `tileset.ts`: the static root `tileset.json` with the two hemisphere children.
+- [x] Tests: compared against `@cesium/engine` (devDependency) `Cartesian3.fromDegrees`, `Transforms.eastNorthUpToFixedFrame` and `Axis.Z_UP_TO_Y_UP` to within 1e-6 m, and the grid against `@map-colonies/tile-calc` `WorldCRS84Quad`.
 
 ### M4: Mesh builder
 
-- [ ] WKB parsing (`wkx`, or a small reader for Polygon and MultiPolygon only), ring orientation.
-- [ ] Extrusion in ENU, from `base_h + min_height` to `base_h + height`: walls as quads with flat normals, and roof and floor with `earcut` (holes supported).
+- [ ] WKB parsing (`wkx`, or a small reader for Polygon, MultiPolygon and their Z variants), ring orientation.
+- [ ] **3D faces first (3DBAG):** per face, a Newell normal, projection onto the face plane, `earcut` with holes, and a check that faces point outward.
+- [ ] Extrusion for 2D footprints (OSM, later): from `base_h + min_height` to `base_h + height`, walls as quads with flat normals, and roof and floor with `earcut`.
 - [ ] A per-vertex `_FEATURE_ID_0`.
-- [ ] Tests: vertex and triangle counts, normals pointing outward, a closed solid, a polygon with a hole.
+- [ ] Tests: vertex and triangle counts, normals pointing outward, a closed solid, a polygon with a hole, a sloped roof face.
 
 ### M5: GLB encoder
 
@@ -200,11 +228,20 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 - [ ] Grafana dashboard based on `retiler/dashboards/instance.json`.
 - [ ] README: running locally (`docker compose` with PostGIS and MinIO), config reference.
 
-### Parallel track D: Data (osm2pgsql flex)
+### Parallel track D: Data
+
+**D1: 3DBAG import (first)**
+
+- [ ] `scripts/import-3dbag.sh`: `ogr2ogr` of `lod22_3d` joined with the `pand` attributes into `buildings`, from EPSG:7415 to **EPSG:4979**, with the RDNAPTRANS and NLGEO2018 grids. The script fails if `projinfo` shows that it would use a ballpark transform.
+- [ ] Check one building against its known NAP height + geoid undulation (about 43 m).
+- [ ] A SQL step that fills `tile_z`, `tile_x`, `tile_y` (WorldCRS84Quad, y from the north, the same as `grid.ts`) from the footprint centroid, and `meta_x`, `meta_y` from the tile indices. Then index `(meta_x, meta_y)`.
+- [ ] The table contract the worker reads: `id text`, `geom geometry(MultiPolygonZ, 4979)`, `height real`, `tile_z/x/y int`, `meta_x/y int`, plus attribute columns.
+
+**D2: OSM (osm2pgsql flex, later)**
 
 - [ ] Flex Lua style for `buildings`: `height` from the `height` tag, else `building:levels × 3 m`, else a default; `min_height`; tile and metatile columns computed in Lua from the centroid using the same grid as `grid.ts` (shared test vectors); index `(meta_x, meta_y)`.
 - [ ] Base elevation: a DEM raster table (`postgis_raster`) plus geoid, filled by an insert/update trigger, or sampled at render time. **Decision needed (§4).**
-- [ ] Expiry: work out what metatile-queue-populator expects. osm2pgsql expiry outputs EPSG:3857 tiles, and these must be turned into CRS84Quad metatiles. A building that moves expires both its old and new metatiles.
+- [x] Expiry: the osm2pgsql fork outputs expired tiles in EPSG:4326, which metatile-queue-populator turns into WorldCRS84Quad jobs. That grid is the one `grid.ts` uses. A building that moves expires both its old and new metatiles.
 
 ### Later
 
@@ -214,12 +251,18 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 
 ---
 
-## 4. Open questions
+## 4. Decisions
 
-1. **Grid:** two hemisphere roots aligned with CRS84Quad (§1.1, recommended), or the design's single 360×180 root?
-2. **Geometry:** built in Node (§1.2, recommended), or SFCGAL in SQL? Is SFCGAL even available on the target PostGIS?
-3. **Config schema:** retiler uses `vectorRetilerV3` from `@map-colonies/schemas`. Do we add a `3dtiler/v1` schema to that repo, or start with offline mode and a local schema?
-4. **Source table:** do you already have a `buildings` table, and with which columns and SRID? Or is the osm2pgsql flex style part of this work?
-5. **DEM and terrain:** which terrain does the Cesium client use, so that `base_h` is sampled from the same DEM?
-6. **Queue producer:** do we reuse metatile-queue-populator as is (its job shape and its expiry input format), or write our own enqueue script for the MVP?
-7. **Content levels:** z14/z15 with the halved CRS84Quad tiles, or z13/z14?
+Resolved:
+
+1. **Grid:** two hemisphere roots aligned with WorldCRS84Quad (§1.1), because the jobs come from metatile-queue-populator.
+2. **Geometry:** built in Node (§1.2). SFCGAL is not required.
+3. **Config schema:** a local schema in offline mode.
+4. **Source data:** 3DBAG first (§1.4), OSM later.
+5. **Queue producer:** metatile-queue-populator, with the osm2pgsql fork that outputs expired tiles in EPSG:4326.
+
+Still open:
+
+1. **SFCGAL on the target PostGIS:** it is no longer required. Check it anyway with `SELECT postgis_full_version();`.
+2. **Client terrain:** which terrain Cesium will use. It does not block 3DBAG (§1.4), but it does block `base_h` for OSM.
+3. **Content levels:** z14/z15 with the halved WorldCRS84Quad tiles, or z13/z14. This will be decided from the tile sizes measured at the M6 gate.
