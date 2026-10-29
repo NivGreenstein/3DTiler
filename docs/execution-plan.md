@@ -8,6 +8,10 @@ This plan turns the [design plan](./osm-3d-tiles-plan.md) into milestones. It is
 - **osm-sync-tracker**: the DB layer (TypeORM `DataSource` factory, `dataSource.getRepository(X).extend({...})` custom repositories, registered in tsyringe by symbol).
 - **pg2b3dm**: the 3D Tiles output (implicit tiling, subtree files, `EXT_mesh_features` and `EXT_structural_metadata`, triangulating footprints in code).
 
+## Status
+
+M1 to M7 work end to end on a 3DBAG tile with `docker compose up` (see the [README](../README.md)). The output passes `3d-tiles-validator` with no errors or warnings, renders in Cesium, and building properties can be picked. Left: S3 storage, meshopt compression, Helm, and the OSM source.
+
 ---
 
 ## 1. Changes to the design plan
@@ -28,7 +32,7 @@ The content URIs differ only by prefix: `content/{h}/{level}/{x}/{y}.glb` and `s
 
 **Side effect:** tiles are half as wide as in the design at the same level. A CRS84Quad z15 tile is about 0.6×0.6 km at the equator. We either keep z14/z15 as content levels (smaller tiles, which helps the dense-tile size target) or move them to z13/z14. This is a tuning setting.
 
-### 1.2 Build the geometry in Node, not in SQL (decided)
+### 1.2 Build the geometry in Node, not in SQL (decided, with a PostGIS option)
 
 The design runs `CG_Extrude`, `CG_Tesselate` and `ST_TransformPipeline` per row. That requires SFCGAL, which managed or Crunchy PostGIS images often don't ship, plus PostGIS 3.4 or later. It also builds a PROJ pipeline string per row, which PostGIS does not cache, and it spends CPU on the database that osm2pgsql and pg-boss also use.
 
@@ -45,6 +49,11 @@ The mesh builder supports two kinds of input, so both data sources go through th
 | **OSM** (osm2pgsql) | 2D footprint `MultiPolygon` + `height`, `min_height`, `base_h` | Extrude: walls as quads, roof and floor with `earcut`, then the same path as above.     |
 
 This is a few hundred lines of pure, unit-testable code. Workers scale horizontally and the database does index lookups only.
+
+**Feature flag.** `app.tiling.geometryBuilder` (`TILING_GEOMETRY_BUILDER`) is `node` (the default) or `postgis`. In `postgis` mode SFCGAL tesselates every face and `ST_TransformPipeline` converts it to the tile frame, so the worker only collects triangles. An integration test checks that both builders produce the same mesh within 1 mm. Two things came up against the `postgis/postgis:16-3.4` image:
+
+- It ships **PROJ 7.2**, which has no `+proj=topocentric` (that arrived in PROJ 8). The ENU step is therefore written as `+proj=cart` followed by an `+proj=affine` with the tile rotation and offset, which works with PROJ 6 and later.
+- SFCGAL 1.3 **throws on invalid faces**, and 3DBAG has faces with a repeated vertex. That failed the whole tile. Each face is now tesselated through a session-temporary PL/pgSQL function that returns NULL for a face SFCGAL rejects, and the face is skipped, as the node builder does. This needs only the default `TEMP` privilege.
 
 ### 1.3 Smaller fixes
 
@@ -191,44 +200,44 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 - [x] `tileset.ts`: the static root `tileset.json` with the two hemisphere children.
 - [x] Tests: compared against `@cesium/engine` (devDependency) `Cartesian3.fromDegrees`, `Transforms.eastNorthUpToFixedFrame` and `Axis.Z_UP_TO_Y_UP` to within 1e-6 m, and the grid against `@map-colonies/tile-calc` `WorldCRS84Quad`.
 
-### M4: Mesh builder
+### M4: Mesh builder ✅
 
-- [ ] WKB parsing (`wkx`, or a small reader for Polygon, MultiPolygon and their Z variants), ring orientation.
-- [ ] **3D faces first (3DBAG):** per face, a Newell normal, projection onto the face plane, `earcut` with holes, and a check that faces point outward.
+- [x] WKB parsing (`src/mesh/wkb.ts`: Polygon, MultiPolygon, TIN and Triangle, ISO and EWKB, with or without Z).
+- [x] **3D faces first (3DBAG):** per face, a Newell normal, projection onto the face plane, `earcut` with holes, and every triangle wound like its face.
+- [x] The `postgis` builder behind the feature flag (§1.2).
 - [ ] Extrusion for 2D footprints (OSM, later): from `base_h + min_height` to `base_h + height`, walls as quads with flat normals, and roof and floor with `earcut`.
-- [ ] A per-vertex `_FEATURE_ID_0`.
-- [ ] Tests: vertex and triangle counts, normals pointing outward, a closed solid, a polygon with a hole, a sloped roof face.
+- [x] A per-vertex `_FEATURE_ID_0`.
+- [x] Tests: areas, normals pointing outward, a polygon with a hole, a sloped roof face, degenerate faces, and node against PostGIS.
 
-### M5: GLB encoder
+### M5: GLB encoder ✅ (except compression)
 
-- [ ] `@gltf-transform/core` document: one primitive per tile, positions as float32 ENU, normals, feature ids, one material.
-- [ ] `EXT_mesh_features` and `EXT_structural_metadata` as gltf-transform `Extension` classes. First check whether the classes in CesiumGS `3d-tiles-tools` can be reused (Apache-2.0). Otherwise write about 150 lines.
-- [ ] `EXT_meshopt_compression` with `KHR_mesh_quantization` (`meshoptimizer` package). Draco is optional, behind a setting.
-- [ ] Tests: `gltf-validator` passes with no errors, and the output decodes back to the same feature count.
+- [x] A small GLB writer of our own (`src/glb/glbWriter.ts`) instead of gltf-transform, which drops extensions it does not know: one primitive per tile, float32 ENU positions, normals, `COLOR_0` by face label, feature ids, and a property table (id, building_id, height, ground_height, construction_year, roof_type).
+- [ ] `EXT_meshopt_compression` with `KHR_mesh_quantization`. This needs `EXT_mesh_features` / `EXT_structural_metadata` gltf-transform extension classes first.
+- [x] Tests: the Khronos `gltf-validator` reports no errors and no warnings, and buffer views are 8-byte aligned.
 
 ### M6: End-to-end tile job (the design's **Phase 2 gate**)
 
 > **Job size.** metatile-queue-populator sends jobs with `metatile = 8`, which is an 8×8 block of tiles at the job zoom `z`, or one tile at `z − 3`. With content at z14/z15, a job at `z = 16` covers one z13 tile: 4 + 16 = 20 GLBs. A job at `z = 14` covers a z11 tile: 64 + 256 = 320 GLBs, and one query could return tens of thousands of buildings in a city. The processor therefore queries and encodes **one content tile range at a time**, never the whole job in memory. The populator zoom is a tuning setting.
 
-- [ ] Port the storage providers (S3 and FS). Add `ContentType` (`model/gltf-binary`, `application/octet-stream` for `.subtree`, `application/json`) and a layout template per artifact type.
-- [ ] `TileProcessor.processMetatile` with tracing spans, metrics (`3dtiler_tiles_count`, duration histogram by kind `query|mesh|encode|store|delete`), and empty-tile deletion.
-- [ ] A one-off command that writes the static `tileset.json` (§1.1).
-- [ ] A dev script that enqueues the Tel Aviv metatiles.
-- **Gate:** `npx 3d-tiles-validator` passes, Tel Aviv renders correctly in Cesium (one known building checked against Cesium's position), and a z15 tile is at most 1–2 MB.
+- [x] FS storage (atomic writes) with content types. S3 storage is not done yet.
+- [x] `TileProcessor.processMetatile`: one content tile at a time, tracing spans, metrics (`tiler3d_content_tiles_count`, `tiler3d_action_duration_seconds` by `build|encode|store`), and empty-tile deletion.
+- [x] The subtree worker writes the static `tileset.json` at startup (§1.1).
+- [x] `cli/seed.ts` queues one job per metatile area that has buildings, as metatile-queue-populator would.
+- **Gate (on the 3DBAG tile):** _passed._ `3d-tiles-validator` 0.6.1 reports 0 errors and 0 warnings. Cesium renders the buildings, which line up with the OpenStreetMap footprints. Picking returns the database values. The largest z15 tile is 0.93 MB uncompressed with the node builder, under the 1–2 MB target before any compression. The design's Tel Aviv gate still needs Israeli data.
 
-### M7: Subtrees and availability
+### M7: Subtrees and availability ✅
 
-- [ ] `subtree.ts` binary writer: header, JSON, bitstreams, with `constant` used when a bitstream is all 0 or all 1.
-- [ ] Rule: tile availability is the content tiles plus all of their ancestors (needed for ADD traversal). Child subtree availability is set at the last level.
-- [ ] `SubtreeProcessor` job (`app.mode = 'subtrees'`), enqueued from tile jobs with a `singletonKey`.
-- [ ] Tests: round-trip through `3d-tiles-tools` subtree reading, and the validator passes on a generated tileset.
+- [x] `subtree.ts` binary writer: header, JSON, 8-byte aligned bitstreams, with `constant` used when a bitstream is all 0 or all 1.
+- [x] Tile availability is the content tiles plus all of their ancestors, and child subtree availability marks the subtrees below with content. Hemisphere roots are always written.
+- [x] `SubtreeProcessor` (`app.mode = 'subtrees'`) on a pg-boss `stately` queue keyed by subtree, enqueued by tile jobs.
+- [x] Tests: bit positions and the header, and the validator passes on a generated tileset. Subtrees are rebuilt from the buildings table, which is a full index scan for a hemisphere root. A `content_tiles` table can replace it when the data grows.
 
-### M8: Ops
+### M8: Ops (partly)
 
 - [ ] Helm: two deployments (tiles and subtrees) from one chart, with values for both queues, the DB, S3 and SSL secrets.
 - [ ] S3 bucket CORS and MIME types documented.
 - [ ] Grafana dashboard based on `retiler/dashboards/instance.json`.
-- [ ] README: running locally (`docker compose` with PostGIS and MinIO), config reference.
+- [x] README: `docker compose` (PostGIS, 3DBAG import, seed, both workers, a Cesium viewer), and a config reference. MinIO comes with S3 storage.
 
 ### Parallel track D: Data
 
