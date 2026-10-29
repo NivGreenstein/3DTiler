@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3DTiler viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/Cesium.js"></script>
+    <style>
+      html,
+      body,
+      #viewer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        font-family: sans-serif;
+      }
+      #panel {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        z-index: 1;
+        max-width: 320px;
+        padding: 8px 10px;
+        border-radius: 4px;
+        background: rgba(30, 30, 30, 0.85);
+        color: #eee;
+        font-size: 13px;
+      }
+      #panel label {
+        display: block;
+        margin: 4px 0;
+      }
+      #panel input[type='number'] {
+        width: 70px;
+      }
+      #status {
+        color: #9cf;
+      }
+      #feature table {
+        border-collapse: collapse;
+        margin-top: 6px;
+      }
+      #feature td {
+        padding: 1px 6px 1px 0;
+        vertical-align: top;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewer"></div>
+    <div id="panel">
+      <strong>3DTiler viewer</strong>
+      <div id="status">loading tileset...</div>
+      <label
+        title="Buildings stand at their real ellipsoidal height. Without a terrain the globe is the bare WGS84 ellipsoid (0 m), so they float above it by the ground height (about 115 to 175 m in Valkenburg). Lower them here, or open the viewer with ?ionToken=... for Cesium World Terrain."
+      >
+        height offset (m) <input id="heightOffset" type="number" step="1" />
+      </label>
+      <div id="terrain"></div>
+      <label><input id="boundingVolumes" type="checkbox" /> show tile bounding volumes</label>
+      <div id="feature">click a building to see its properties</div>
+    </div>
+    <script>
+      // Viewer parameters, from the query string: tileset, lon, lat, range (m), heightOffset (m), and ionToken for Cesium World Terrain.
+      const params = new URLSearchParams(window.location.search);
+      const tilesetUrl = params.get('tileset') ?? 'tiles/tileset.json';
+      // defaults to the 3DBAG sample tile in Valkenburg aan de Geul
+      const lon = Number(params.get('lon') ?? 5.832);
+      const lat = Number(params.get('lat') ?? 50.8605);
+      const range = Number(params.get('range') ?? 900);
+      const heightOffsetInput = document.getElementById('heightOffset');
+      heightOffsetInput.value = params.get('heightOffset') ?? '0';
+
+      const status = document.getElementById('status');
+      const featurePanel = document.getElementById('feature');
+
+      const ionToken = params.get('ionToken');
+      if (ionToken !== null) {
+        Cesium.Ion.defaultAccessToken = ionToken;
+      }
+      document.getElementById('terrain').textContent = ionToken === null ? 'terrain: none (WGS84 ellipsoid)' : 'terrain: Cesium World Terrain';
+
+      const viewer = new Cesium.Viewer('viewer', {
+        baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })),
+        terrain: ionToken === null ? undefined : Cesium.Terrain.fromWorldTerrain(),
+        terrainProvider: ionToken === null ? new Cesium.EllipsoidTerrainProvider() : undefined,
+        baseLayerPicker: false,
+        geocoder: false,
+        timeline: false,
+        animation: false,
+        sceneModePicker: false,
+        navigationHelpButton: false,
+        infoBox: false,
+        selectionIndicator: false,
+      });
+      viewer.scene.globe.depthTestAgainstTerrain = ionToken !== null;
+
+      const applyHeightOffset = (tileset) => {
+        const offset = Number(heightOffsetInput.value) || 0;
+        const center = Cesium.Cartesian3.fromDegrees(lon, lat, 0);
+        const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(center, new Cesium.Cartesian3());
+        tileset.modelMatrix = Cesium.Matrix4.fromTranslation(Cesium.Cartesian3.multiplyByScalar(up, offset, new Cesium.Cartesian3()));
+      };
+
+      const showFeature = (feature) => {
+        if (feature === undefined) {
+          featurePanel.textContent = 'click a building to see its properties';
+          return;
+        }
+        const rows = feature
+          .getPropertyIds()
+          .map((name) => `<tr><td>${name}</td><td>${feature.getProperty(name)}</td></tr>`)
+          .join('');
+        featurePanel.innerHTML = `<table>${rows}</table>`;
+      };
+
+      const start = async () => {
+        const tileset = await Cesium.Cesium3DTileset.fromUrl(tilesetUrl);
+        viewer.scene.primitives.add(tileset);
+        window.tileset = tileset;
+        window.viewer = viewer;
+        applyHeightOffset(tileset);
+
+        let loadedTiles = 0;
+        tileset.tileLoad.addEventListener(() => {
+          loadedTiles++;
+          status.textContent = `${loadedTiles} content tiles loaded`;
+        });
+        tileset.tileFailed.addEventListener((error) => {
+          status.textContent = `failed loading ${error.url}: ${error.message}`;
+        });
+        status.textContent = 'tileset loaded, waiting for content';
+
+        heightOffsetInput.addEventListener('change', () => applyHeightOffset(tileset));
+        document.getElementById('boundingVolumes').addEventListener('change', (event) => {
+          tileset.debugShowBoundingVolume = event.target.checked;
+        });
+
+        let selected;
+        viewer.screenSpaceEventHandler.setInputAction((click) => {
+          if (selected !== undefined) {
+            selected.color = Cesium.Color.WHITE;
+          }
+          const picked = viewer.scene.pick(click.position);
+          selected = picked instanceof Cesium.Cesium3DTileFeature ? picked : undefined;
+          if (selected !== undefined) {
+            selected.color = Cesium.Color.YELLOW;
+          }
+          showFeature(selected);
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+      };
+
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(lon, lat - range / 111000 / 1.2, range * 0.7),
+        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-40), roll: 0 },
+      });
+
+      start().catch((error) => {
+        status.textContent = `failed loading the tileset: ${error.message}`;
+        console.error(error);
+      });
+    </script>
+  </body>
+</html>

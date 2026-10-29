@@ -28,6 +28,9 @@ RUN npm ci --only=production
 COPY --chown=node:node --from=build /tmp/buildApp/dist .
 COPY --chown=node:node ./config ./config
 
+# the default directory of the fs tiles storage, a volume mounted here is created owned by node
+RUN mkdir -p /tiles && chown node:node /tiles
+
 
 USER node
 EXPOSE 8080
