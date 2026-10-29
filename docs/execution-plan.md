@@ -41,16 +41,16 @@ This is about 200 lines of pure, unit-testable code. Workers scale horizontally 
 
 ### 1.3 Smaller fixes
 
-| Item | Change |
-|---|---|
-| Root region height | **−200 m is too high for Israel.** The Dead Sea shore is at about −430 m orthometric. Use about **−500 m to 6000 m**. |
-| Metatile columns | Derive them from the tile indices: `meta_x = tile_x >> (tile_z − metaZ)`. Computing them from the centroid separately can put a building at a tile edge into a different metatile than its tile. |
-| Base elevation | Store one **scalar** column (`base_h`, ellipsoidal). Don't store it as Z on the footprint. A footprint with varying Z gives tilted roofs. The DEM **must match the terrain the Cesium client uses**, or buildings will float or sink. |
-| Winding / culling | Force CCW outer rings and CW holes. Start with `doubleSided: true` (pg2b3dm's default) and switch it off once winding is verified. |
-| `osm_id` in metadata | OSM ids are larger than uint32, so use `INT64` in the property table. Negative ids from osm2pgsql relations need a signed type. |
-| Cesium dependency | Don't add `cesium` as a runtime dependency just for one matrix. Write the ENU→ECEF matrix ourselves (about 20 lines), and use `cesium` as a **devDependency** only to check it in tests. |
+| Item                        | Change                                                                                                                                                                                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Root region height          | **−200 m is too high for Israel.** The Dead Sea shore is at about −430 m orthometric. Use about **−500 m to 6000 m**.                                                                                                                          |
+| Metatile columns            | Derive them from the tile indices: `meta_x = tile_x >> (tile_z − metaZ)`. Computing them from the centroid separately can put a building at a tile edge into a different metatile than its tile.                                               |
+| Base elevation              | Store one **scalar** column (`base_h`, ellipsoidal). Don't store it as Z on the footprint. A footprint with varying Z gives tilted roofs. The DEM **must match the terrain the Cesium client uses**, or buildings will float or sink.          |
+| Winding / culling           | Force CCW outer rings and CW holes. Start with `doubleSided: true` (pg2b3dm's default) and switch it off once winding is verified.                                                                                                             |
+| `osm_id` in metadata        | OSM ids are larger than uint32, so use `INT64` in the property table. Negative ids from osm2pgsql relations need a signed type.                                                                                                                |
+| Cesium dependency           | Don't add `cesium` as a runtime dependency just for one matrix. Write the ENU→ECEF matrix ourselves (about 20 lines), and use `cesium` as a **devDependency** only to check it in tests.                                                       |
 | Content outside tile bounds | A building whose centroid is in a tile can stick out past the tile's region. This is acceptable for the MVP because buildings are small next to the tile. If culling pops at edges, add `TILE_BOUNDING_REGION` metadata to the subtrees later. |
-| Empty tiles | When an update leaves a tile empty, **delete** its GLB and clear its availability (the same as retiler's `deleteBlankTiles`). |
+| Empty tiles                 | When an update leaves a tile empty, **delete** its GLB and clear its availability (the same as retiler's `deleteBlankTiles`).                                                                                                                  |
 
 ### 1.4 GLB node transform (confirming the design)
 
@@ -106,7 +106,9 @@ const createBuildingRepository = (dataSource: DataSource) => {
         .where('b.meta_x = :metaX AND b.meta_y = :metaY', { metaX, metaY })
         .getRawMany();
     },
-    async findContentTilesInSubtree(/* subtree root */): Promise<TileIndex[]> { /* SELECT DISTINCT tile_z, tile_x, tile_y ... */ },
+    async findContentTilesInSubtree(/* subtree root */): Promise<TileIndex[]> {
+      /* SELECT DISTINCT tile_z, tile_x, tile_y ... */
+    },
   });
 };
 export type BuildingRepository = ReturnType<typeof createBuildingRepository>;
@@ -135,12 +137,14 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 
 ## 3. Milestones (each one is a PR)
 
-### M0: Decisions and data contract *(blocks M2)*
+### M0: Decisions and data contract _(blocks M2)_
+
 - [ ] Resolve the open questions in §4.
 - [ ] Freeze the `buildings` table contract: columns, types, SRID, indexes.
 - [ ] Get or register a config schema in `@map-colonies/schemas` (see §4).
 
 ### M1: Worker skeleton
+
 - [ ] Remove the boilerplate REST resources, OpenAPI router and `serverBuilder`. Keep vitest, eslint, prettier, husky, Dockerfile and helm.
 - [ ] Port from retiler: `index.ts` (terminus liveness, `/metrics`), `CleanupRegistry`, `ON_SIGNAL`, and `postInjectionHook` / `afterAllInjectionHook` in `dependencyRegistration.ts`.
 - [ ] Port `PgBossJobQueueProvider` and `pgbossFactory` (pg-boss 12) with their unit tests, converted from jest to vitest.
@@ -148,29 +152,34 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 - **Done when:** the worker starts, consumes a dummy queue, and shuts down gracefully.
 
 ### M2: DB layer
+
 - [ ] `common/db/index.ts` in the osm-sync-tracker style: SSL from files, cached `DataSource`, health check (included in liveness together with pg-boss).
 - [ ] `building` entity and `BuildingRepository` with `findByMetatile` and `findContentTilesInSubtree`.
 - [ ] Integration tests against a PostGIS container with fixture buildings (a few Tel Aviv blocks, one with a hole, one multipolygon, one crossing a tile edge).
 - **Done when:** the repository returns the expected rows for a metatile, and `EXPLAIN` shows an index scan.
 
-### M3: Tiling math *(pure, can run in parallel with M2)*
+### M3: Tiling math _(pure, can run in parallel with M2)_
+
 - [ ] `grid.ts`: hemisphere mapping, y flip, tile bounds in radians, `metatileToContentTiles`, `contentTileToSubtree`.
 - [ ] `enu.ts`: WGS84 geodetic→ECEF, ENU basis, column-major node matrix including Z_UP_TO_Y_UP.
 - [ ] Tests: compare against `cesium` (devDependency) `Cartesian3.fromDegrees`, `Transforms.eastNorthUpToFixedFrame` and `Axis.Z_UP_TO_Y_UP` to within 1e-6.
 
 ### M4: Mesh builder
+
 - [ ] WKB parsing (`wkx`, or a small reader for Polygon and MultiPolygon only), ring orientation.
 - [ ] Extrusion in ENU, from `base_h + min_height` to `base_h + height`: walls as quads with flat normals, and roof and floor with `earcut` (holes supported).
 - [ ] A per-vertex `_FEATURE_ID_0`.
 - [ ] Tests: vertex and triangle counts, normals pointing outward, a closed solid, a polygon with a hole.
 
 ### M5: GLB encoder
+
 - [ ] `@gltf-transform/core` document: one primitive per tile, positions as float32 ENU, normals, feature ids, one material.
 - [ ] `EXT_mesh_features` and `EXT_structural_metadata` as gltf-transform `Extension` classes. First check whether the classes in CesiumGS `3d-tiles-tools` can be reused (Apache-2.0). Otherwise write about 150 lines.
 - [ ] `EXT_meshopt_compression` with `KHR_mesh_quantization` (`meshoptimizer` package). Draco is optional, behind a setting.
 - [ ] Tests: `gltf-validator` passes with no errors, and the output decodes back to the same feature count.
 
 ### M6: End-to-end tile job (the design's **Phase 2 gate**)
+
 - [ ] Port the storage providers (S3 and FS). Add `ContentType` (`model/gltf-binary`, `application/octet-stream` for `.subtree`, `application/json`) and a layout template per artifact type.
 - [ ] `TileProcessor.processMetatile` with tracing spans, metrics (`3dtiler_tiles_count`, duration histogram by kind `query|mesh|encode|store|delete`), and empty-tile deletion.
 - [ ] A one-off command that writes the static `tileset.json` (§1.1).
@@ -178,23 +187,27 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 - **Gate:** `npx 3d-tiles-validator` passes, Tel Aviv renders correctly in Cesium (one known building checked against Cesium's position), and a z15 tile is at most 1–2 MB.
 
 ### M7: Subtrees and availability
+
 - [ ] `subtree.ts` binary writer: header, JSON, bitstreams, with `constant` used when a bitstream is all 0 or all 1.
 - [ ] Rule: tile availability is the content tiles plus all of their ancestors (needed for ADD traversal). Child subtree availability is set at the last level.
 - [ ] `SubtreeProcessor` job (`app.mode = 'subtrees'`), enqueued from tile jobs with a `singletonKey`.
 - [ ] Tests: round-trip through `3d-tiles-tools` subtree reading, and the validator passes on a generated tileset.
 
 ### M8: Ops
+
 - [ ] Helm: two deployments (tiles and subtrees) from one chart, with values for both queues, the DB, S3 and SSL secrets.
 - [ ] S3 bucket CORS and MIME types documented.
 - [ ] Grafana dashboard based on `retiler/dashboards/instance.json`.
 - [ ] README: running locally (`docker compose` with PostGIS and MinIO), config reference.
 
 ### Parallel track D: Data (osm2pgsql flex)
+
 - [ ] Flex Lua style for `buildings`: `height` from the `height` tag, else `building:levels × 3 m`, else a default; `min_height`; tile and metatile columns computed in Lua from the centroid using the same grid as `grid.ts` (shared test vectors); index `(meta_x, meta_y)`.
 - [ ] Base elevation: a DEM raster table (`postgis_raster`) plus geoid, filled by an insert/update trigger, or sampled at render time. **Decision needed (§4).**
 - [ ] Expiry: work out what metatile-queue-populator expects. osm2pgsql expiry outputs EPSG:3857 tiles, and these must be turned into CRS84Quad metatiles. A building that moves expires both its old and new metatiles.
 
 ### Later
+
 - Detiler integration (skip tiles that are already up to date, cooldowns), in the same pattern as retiler.
 - A z16 content level for dense areas, and `TILE_BOUNDING_REGION` subtree metadata.
 - An OGC API – Features service for picking and identifying features.

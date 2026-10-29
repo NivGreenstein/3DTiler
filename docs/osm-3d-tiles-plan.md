@@ -51,8 +51,7 @@ Written once, never regenerated:
   "geometricError": 1600000,
   "root": {
     "boundingVolume": {
-      "region": [-3.141592653589793, -1.5707963267948966,
-                 3.141592653589793, 1.5707963267948966, -200, 6000]
+      "region": [-3.141592653589793, -1.5707963267948966, 3.141592653589793, 1.5707963267948966, -200, 6000]
     },
     "geometricError": 800000,
     "refine": "ADD",
@@ -125,13 +124,13 @@ Requires PostGIS 3.4+ (`ST_TransformPipeline`) and SFCGAL (`CG_*` on 3.5+, `ST_E
 
 ```js
 import { Cartesian3, Transforms, Matrix4, Axis } from 'cesium';
-const center = Cartesian3.fromDegrees(clon, clat, 0);           // same center as SQL
+const center = Cartesian3.fromDegrees(clon, clat, 0); // same center as SQL
 const enuToEcef = Transforms.eastNorthUpToFixedFrame(center);
 const nodeMatrix = Matrix4.multiply(Axis.Z_UP_TO_Y_UP, enuToEcef, new Matrix4());
-rootNode.setMatrix(Matrix4.toArray(nodeMatrix));                // column-major
+rootNode.setMatrix(Matrix4.toArray(nodeMatrix)); // column-major
 ```
 
-   With implicit tiling there is no per-tile entry in `tileset.json`, so the matrix lives in the GLB and each tile is self-contained.
+With implicit tiling there is no per-tile entry in `tileset.json`, so the matrix lives in the GLB and each tile is self-contained.
 
 5. **Upload** to `s3://bucket/content/{z}/{x}/{y}.glb`.
 6. **Validate** with `npx 3d-tiles-validator` and view in Cesium.
