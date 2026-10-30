@@ -43,6 +43,7 @@ Then open http://localhost:8080. Compose starts:
 | ---------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `postgis`        | PostGIS 16 with `postgis_sfcgal`                                                                                  |
 | `import-3dbag`   | Downloads the 3DBAG tiles in `TILE_IDS` and the Dutch PROJ grids, and imports them into `buildings`               |
+| `extract-overture`  | Only with `--profile footprints`: downloads Overture Maps buildings for `OVERTURE_BBOX` into `./data/$FOOTPRINTS_FILE`, unless the file is already there |
 | `import-footprints` | Only with `--profile footprints`: imports the footprint file `./data/$FOOTPRINTS_FILE`                         |
 | `seed`           | Stands in for metatile-queue-populator: queues one job per metatile area that has buildings                       |
 | `tiler-tiles`    | The worker in `tiles` mode                                                                                         |
@@ -54,7 +55,8 @@ Compose settings (environment variables or an `.env` file):
 | Variable                          | Default         | Description                                                    |
 | --------------------------------- | --------------- | -------------------------------------------------------------- |
 | `TILE_IDS`                        | `8-688-40`      | Space separated 3DBAG tile ids, from https://3dbag.nl/en/download. Empty imports none |
-| `FOOTPRINTS_FILE`                 | `buildings.gpkg` | The footprint file in `./data`, with `--profile footprints`   |
+| `FOOTPRINTS_FILE`                 | `tel-aviv-buildings.gpkg` | The footprint file in `./data`, with `--profile footprints` |
+| `OVERTURE_BBOX`                   | `34.74,32.04,34.82,32.12` | The Overture Maps area downloaded when that file is missing (Tel Aviv) |
 | `GROUND_HEIGHT`                   | `0`             | The ellipsoidal ground height given to extruded footprints     |
 | `BAG3D_VERSION`                   | `v20250903`     | The 3DBAG release                                              |
 | `GEOMETRY_BUILDER`                | `node`          | `node` or `postgis`, see [Geometry builders](#geometry-builders) |
@@ -67,21 +69,21 @@ To process new data, import it and run the seed again:
 TILE_IDS="8-688-40 8-688-48" docker compose up import-3dbag seed
 ```
 
-To tile Tel Aviv from Overture Maps instead (EPSG:4326 footprints), extract it (see [Importing 2D footprints](#importing-2d-footprints)) into `./data`, then:
+To also tile Tel Aviv from Overture Maps (31,281 EPSG:4326 footprints, downloaded on the first run):
 
 ```bash
-FOOTPRINTS_FILE=tel-aviv-buildings.gpkg TILE_IDS= docker compose --profile footprints up --build
+docker compose --profile footprints up --build
 ```
 
-and open http://localhost:8080/?lon=34.795&lat=32.075&range=1800.
+Add `TILE_IDS=` to skip the 3DBAG import. To tile your own footprints instead, put the file in `./data` and set `FOOTPRINTS_FILE` (see [Importing 2D footprints](#importing-2d-footprints) for the attribute mapping).
 
 ### The viewer
 
-The viewer (`viewer/index.html`) uses CesiumJS with OpenStreetMap imagery, and needs no Cesium ion account. Click a building to see its properties. Query parameters:
+The viewer (`viewer/index.html`) uses CesiumJS with OpenStreetMap imagery, and needs no Cesium ion account. It opens on the source with the most buildings, from the `extent.json` the seed command writes next to the tileset, and has a button to fly to every source. Click a building to see its properties. Query parameters:
 
 | Parameter              | Description                                                                                                    |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `lon`, `lat`, `range`  | The camera target and distance (defaults to the 3DBAG sample in Valkenburg, use `?lon=34.795&lat=32.075&range=1800` for Tel Aviv) |
+| `lon`, `lat`, `range`  | The camera target and distance, instead of the largest source                                                 |
 | `heightOffset`         | Moves the tileset up or down, in meters                                                                        |
 | `ionToken`             | A Cesium ion token, to use Cesium World Terrain                                                                |
 | `tileset`              | The tileset URL (defaults to `tiles/tileset.json`)                                                             |

@@ -2,9 +2,10 @@
 # workers, and a Cesium viewer on http://localhost:8080.
 #   docker compose up --build
 # Settings (environment variables or an .env file): TILE_IDS, BAG3D_VERSION, GEOMETRY_BUILDER (node or postgis), METATILE_ZOOM,
-# METATILE_SIZE, VIEWER_PORT, and FOOTPRINTS_FILE with the footprints profile.
-# To tile a 2D footprint file (e.g. EPSG:4326 buildings from scripts/overture/extract_buildings.py) put it in ./data and run
-#   FOOTPRINTS_FILE=tel-aviv-buildings.gpkg TILE_IDS= docker compose --profile footprints up --build
+# METATILE_SIZE, VIEWER_PORT, and FOOTPRINTS_FILE, OVERTURE_BBOX with the footprints profile.
+# The footprints profile also tiles 2D footprints in EPSG:4326: ./data/$FOOTPRINTS_FILE, downloaded from Overture Maps for
+# OVERTURE_BBOX (Tel Aviv by default) when it is missing:
+#   docker compose --profile footprints up --build
 
 x-tiler: &tiler
   build: .
@@ -64,13 +65,30 @@ services:
       postgis:
         condition: service_healthy
 
+  # downloads Overture Maps buildings for OVERTURE_BBOX into ./data/$FOOTPRINTS_FILE, unless the file is already there
+  extract-overture:
+    profiles: ['footprints']
+    image: python:3.12-slim
+    entrypoint: ['sh', '-c']
+    command:
+      - >-
+        if [ -f "/data/$$FOOTPRINTS_FILE" ]; then echo "using /data/$$FOOTPRINTS_FILE"; else
+        pip install --quiet --root-user-action=ignore duckdb &&
+        python /scripts/extract_buildings.py --bbox "$$OVERTURE_BBOX" "/data/$$FOOTPRINTS_FILE"; fi
+    environment:
+      FOOTPRINTS_FILE: ${FOOTPRINTS_FILE:-tel-aviv-buildings.gpkg}
+      OVERTURE_BBOX: ${OVERTURE_BBOX:-34.74,32.04,34.82,32.12}
+    volumes:
+      - ./data:/data
+      - ./scripts/overture:/scripts:ro
+
   import-footprints:
     profiles: ['footprints']
     build:
       context: .
       dockerfile: docker/3dbag-import/Dockerfile
     entrypoint: ['/opt/footprints/import.sh']
-    command: ['/data/${FOOTPRINTS_FILE:-buildings.gpkg}']
+    command: ['/data/${FOOTPRINTS_FILE:-tel-aviv-buildings.gpkg}']
     environment:
       PGHOST: postgis
       PGUSER: postgres
@@ -85,6 +103,8 @@ services:
         condition: service_healthy
       # both imports create the buildings table, so they run one after the other
       import-3dbag:
+        condition: service_completed_successfully
+      extract-overture:
         condition: service_completed_successfully
 
   # stands in for metatile-queue-populator: one job per metatile area that has buildings

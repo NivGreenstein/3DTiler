@@ -1,19 +1,23 @@
-// Queues a metatile job for every metatile area that has buildings, the same jobs metatile-queue-populator would produce.
+// Queues a metatile job for every metatile area that has buildings, the same jobs metatile-queue-populator would produce, and writes
+// extent.json (the extent of every source) next to the tileset so the viewer can fly to the data.
 // Usage: node --import ./instrumentation.mjs ./cli/seed.js [--zoom 16] [--metatile 8]
 import 'reflect-metadata';
 import { parseArgs } from 'node:util';
 import type { Logger } from '@map-colonies/js-logger';
 import type { PgBoss } from 'pg-boss';
-import { ExitCodes, ON_SIGNAL, QUEUE_NAME, SERVICES } from '@common/constants';
+import { ExitCodes, ON_SIGNAL, QUEUE_NAME, SERVICES, TILES_STORAGE } from '@common/constants';
 import type { ConfigType } from '@common/config';
 import { BUILDING_CUSTOM_REPOSITORY_SYMBOL, type BuildingRepository } from '@src/building/DAL/buildingRepository';
 import { getDescendantRange, type GridTile } from '@src/tiling/grid';
 import type { MetatileJob } from '@src/tiler/types';
+import type { TilesStorage } from '@src/tiler/tilesStorage/interfaces';
 import { registerExternalValues } from '../containerConfig';
 
 const DEFAULT_ZOOM = '16';
 const DEFAULT_METATILE = '8';
 const HEMISPHERES = [0, 1];
+const EXTENT_KEY = 'extent.json';
+const JSON_INDENT = 2;
 
 const { values } = parseArgs({
   options: {
@@ -54,6 +58,11 @@ const main = async (): Promise<number> => {
     }
 
     logger.info({ msg: 'queued metatile jobs', queueName, count: areas.size, zoom, metatile, areaLevel });
+
+    const sources = await repository.findSourceExtents();
+    const storage = container.resolve<TilesStorage>(TILES_STORAGE);
+    await storage.put(EXTENT_KEY, Buffer.from(JSON.stringify({ sources }, null, JSON_INDENT)), 'application/json');
+    logger.info({ msg: 'stored the extent of every source', sources });
     return ExitCodes.SUCCESS;
   } finally {
     await container.resolve<() => Promise<void>>(ON_SIGNAL)();

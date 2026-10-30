@@ -27,6 +27,15 @@ interface TesselatedFace {
   wkb: Buffer | null;
 }
 
+interface SourceExtent {
+  source: string;
+  count: number;
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+}
+
 interface BuildingRow {
   id: string;
   buildingId: string;
@@ -123,6 +132,24 @@ const createBuildingRepository = (dataSource: DataSource) => {
     },
 
     /**
+     * Returns the extent and the number of buildings of every source.
+     */
+    async findSourceExtents(): Promise<SourceExtent[]> {
+      const rows = await this.createQueryBuilder('building')
+        .select('building.source', 'source')
+        .addSelect('count(*)::integer', 'count')
+        .addSelect('ST_XMin(ST_Extent(building.geom))', 'west')
+        .addSelect('ST_YMin(ST_Extent(building.geom))', 'south')
+        .addSelect('ST_XMax(ST_Extent(building.geom))', 'east')
+        .addSelect('ST_YMax(ST_Extent(building.geom))', 'north')
+        .groupBy('building.source')
+        .orderBy('count', 'DESC')
+        .getRawMany<SourceExtent>();
+
+      return rows;
+    },
+
+    /**
      * Returns the distinct tiles at the target level that have content at the content level inside the range.
      *
      * @param range - An inclusive range of tiles at the content level
@@ -191,7 +218,7 @@ const createBuildingRepository = (dataSource: DataSource) => {
 };
 
 export type BuildingRepository = ReturnType<typeof createBuildingRepository>;
-export type { TesselatedFace, FindOptions };
+export type { TesselatedFace, FindOptions, SourceExtent };
 
 export const buildingRepositoryFactory: FactoryFunction<BuildingRepository> = (depContainer) => {
   return createBuildingRepository(depContainer.resolve<DataSource>(DATA_SOURCE_PROVIDER));

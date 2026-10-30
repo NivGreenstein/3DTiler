@@ -62,16 +62,19 @@
       </label>
       <div id="terrain"></div>
       <label><input id="boundingVolumes" type="checkbox" /> show tile bounding volumes</label>
+      <div id="sources"></div>
       <div id="feature">click a building to see its properties</div>
     </div>
     <script>
       // Viewer parameters, from the query string: tileset, lon, lat, range (m), heightOffset (m), and ionToken for Cesium World Terrain.
       const params = new URLSearchParams(window.location.search);
       const tilesetUrl = params.get('tileset') ?? 'tiles/tileset.json';
-      // defaults to the 3DBAG sample tile in Valkenburg aan de Geul
-      const lon = Number(params.get('lon') ?? 5.832);
-      const lat = Number(params.get('lat') ?? 50.8605);
-      const range = Number(params.get('range') ?? 900);
+      // without lon and lat the camera goes to the largest source in tiles/extent.json, which the seed command writes
+      let lon = Number(params.get('lon') ?? 5.832);
+      let lat = Number(params.get('lat') ?? 50.8605);
+      let range = Number(params.get('range') ?? 900);
+      const MAX_RANGE = 2500;
+      const METERS_PER_DEGREE = 111320;
       const heightOffsetInput = document.getElementById('heightOffset');
       heightOffsetInput.value = params.get('heightOffset') ?? '0';
 
@@ -154,10 +157,56 @@
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
       };
 
-      viewer.camera.setView({
-        destination: Cesium.Cartesian3.fromDegrees(lon, lat - range / 111000 / 1.2, range * 0.7),
-        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-40), roll: 0 },
-      });
+      const lookAt = (targetLon, targetLat, targetRange, fly) => {
+        lon = targetLon;
+        lat = targetLat;
+        range = targetRange;
+        const view = {
+          destination: Cesium.Cartesian3.fromDegrees(lon, lat - range / METERS_PER_DEGREE / 1.2, range * 0.7),
+          orientation: { heading: 0, pitch: Cesium.Math.toRadians(-40), roll: 0 },
+        };
+        if (fly) {
+          viewer.camera.flyTo(view);
+        } else {
+          viewer.camera.setView(view);
+        }
+        if (window.tileset !== undefined) {
+          applyHeightOffset(window.tileset);
+        }
+      };
+
+      const extentView = (extent) => {
+        const centerLat = (extent.south + extent.north) / 2;
+        const width = (extent.east - extent.west) * METERS_PER_DEGREE * Math.cos(Cesium.Math.toRadians(centerLat));
+        const height = (extent.north - extent.south) * METERS_PER_DEGREE;
+        return [(extent.west + extent.east) / 2, centerLat, Math.min(Math.max(width, height, 500), MAX_RANGE)];
+      };
+
+      const showSources = async () => {
+        const response = await fetch(tilesetUrl.replace(/tileset\.json$/, 'extent.json'), { cache: 'no-store' });
+        if (!response.ok) {
+          return [];
+        }
+        const { sources } = await response.json();
+        const panel = document.getElementById('sources');
+        panel.textContent = 'fly to: ';
+        for (const extent of sources) {
+          const button = document.createElement('button');
+          button.textContent = `${extent.source} (${extent.count})`;
+          button.addEventListener('click', () => lookAt(...extentView(extent), true));
+          panel.append(button, ' ');
+        }
+        return sources;
+      };
+
+      lookAt(lon, lat, range, false);
+      showSources()
+        .then((sources) => {
+          if (!params.has('lon') && !params.has('lat') && sources.length > 0) {
+            lookAt(...extentView(sources[0]), false);
+          }
+        })
+        .catch((error) => console.warn('no extent.json, run the seed command to write it', error));
 
       start().catch((error) => {
         status.textContent = `failed loading the tileset: ${error.message}`;
