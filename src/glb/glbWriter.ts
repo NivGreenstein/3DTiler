@@ -126,8 +126,12 @@ const writeGlb = ({ mesh, features, nodeMatrix }: GlbTile): Buffer => {
   const featureIdView = bin.addBufferView(mesh.featureIds, GL_ARRAY_BUFFER);
   const indexView = bin.addBufferView(useShortIndices ? Uint16Array.from(mesh.indices) : mesh.indices, GL_ELEMENT_ARRAY_BUFFER);
 
-  const stringProperty = (values: string[]): Record<string, unknown> => {
+  // a buffer view can not be empty, so a string property whose values are all empty is left out of the table, which reads as noData
+  const stringProperty = (values: string[]): Record<string, unknown> | undefined => {
     const encoded = encodeStrings(values);
+    if (encoded.values.byteLength === 0) {
+      return undefined;
+    }
     return { values: bin.addBufferView(encoded.values), stringOffsets: bin.addBufferView(encoded.offsets), stringOffsetType: 'UINT32' };
   };
 

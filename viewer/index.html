@@ -113,7 +113,7 @@
         }
         const rows = feature
           .getPropertyIds()
-          .map((name) => `<tr><td>${name}</td><td>${feature.getProperty(name)}</td></tr>`)
+          .map((name) => `<tr><td>${name}</td><td>${feature.getProperty(name) ?? '-'}</td></tr>`)
           .join('');
         featurePanel.innerHTML = `<table>${rows}</table>`;
       };

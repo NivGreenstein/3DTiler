@@ -26,7 +26,7 @@ const createTestDataSource = async (schema: string): Promise<DataSource> => {
   await dataSource.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
 
   // the same DDL the import scripts run
-  const ddl = readFileSync(path.join(process.cwd(), 'scripts/3dbag/buildings.sql'), 'utf-8').replaceAll(':"schema"', schema);
+  const ddl = readFileSync(path.join(process.cwd(), 'scripts/buildings.sql'), 'utf-8').replaceAll(':"schema"', schema);
   await dataSource.query(ddl);
   return dataSource;
 };

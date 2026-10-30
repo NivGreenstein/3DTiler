@@ -1,6 +1,6 @@
 import { Column, Entity, Index, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 
-// Maps the buildings table filled by the import scripts (scripts/3dbag/buildings.sql), the worker only reads it.
+// Maps the buildings table filled by the import scripts (scripts/buildings.sql), the worker only reads it.
 @Index('buildings_tile_idx', ['tileZ', 'tileX', 'tileY'])
 @Entity({ name: 'buildings', synchronize: false })
 export class BuildingDb {

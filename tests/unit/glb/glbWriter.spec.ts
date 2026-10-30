@@ -73,6 +73,19 @@ describe('glbWriter', () => {
     expect(json.nodes[0]?.matrix).toHaveLength(16);
   });
 
+  it('should leave out a string property whose values are all empty, since a buffer view can not be empty', async () => {
+    const withoutRoofTypes = features.map((feature) => ({ ...feature, roofType: null }));
+    const glbWithoutRoofTypes = writeGlb({ mesh, features: withoutRoofTypes, nodeMatrix: getContentNodeMatrix(createEnuFrame(34.78, 32.08)) });
+
+    const report = await validateBytes(new Uint8Array(glbWithoutRoofTypes));
+    const json = readJson(glbWithoutRoofTypes) as {
+      extensions: { EXT_structural_metadata: { propertyTables: { properties: Record<string, unknown> }[] } };
+    };
+
+    expect(report.issues.numErrors).toBe(0);
+    expect(json.extensions.EXT_structural_metadata.propertyTables[0]?.properties).not.toHaveProperty('roof_type');
+  });
+
   it('should align every buffer view to 8 bytes', () => {
     const json = readJson(glb) as { bufferViews: { byteOffset: number }[] };
 

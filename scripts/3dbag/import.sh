@@ -29,7 +29,7 @@ fi
 
 PSQL=(psql -v ON_ERROR_STOP=1 -q -v schema="$SCHEMA" -v staging_schema="$STAGING_SCHEMA")
 
-"${PSQL[@]}" -f "$SCRIPT_DIR/buildings.sql"
+"${PSQL[@]}" -f "$SCRIPT_DIR/../buildings.sql"
 "${PSQL[@]}" -c "CREATE SCHEMA IF NOT EXISTS \"$STAGING_SCHEMA\""
 
 for gpkg in "$@"; do
