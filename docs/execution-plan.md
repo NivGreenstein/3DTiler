@@ -241,7 +241,7 @@ Subtree jobs run on a **separate pg-boss queue**. The same image runs them with 
 
 - [ ] Helm: two deployments (tiles and subtrees) from one chart, with values for both queues, the DB, S3 and SSL secrets.
 - [ ] S3 bucket CORS and MIME types documented.
-- [ ] Grafana dashboard based on `retiler/dashboards/instance.json`.
+- [ ] Grafana dashboard based on `retiler/dashboards/instance.json`: missing metrics, panels, alerts and a local monitoring profile, planned in [grafana-dashboard-plan.md](./grafana-dashboard-plan.md).
 - [x] README: `docker compose` (PostGIS, 3DBAG import, seed, both workers, a Cesium viewer), and a config reference. MinIO comes with S3 storage.
 
 ### Parallel track D: Data
