@@ -2,7 +2,9 @@
 # workers, and a Cesium viewer on http://localhost:8080.
 #   docker compose up --build
 # Settings (environment variables or an .env file): TILE_IDS, BAG3D_VERSION, GEOMETRY_BUILDER (node or postgis), METATILE_ZOOM,
-# METATILE_SIZE, VIEWER_PORT.
+# METATILE_SIZE, VIEWER_PORT, and FOOTPRINTS_FILE with the footprints profile.
+# To tile a 2D footprint file (e.g. EPSG:4326 buildings from scripts/overture/extract_buildings.py) put it in ./data and run
+#   FOOTPRINTS_FILE=tel-aviv-buildings.gpkg TILE_IDS= docker compose --profile footprints up --build
 
 x-tiler: &tiler
   build: .
@@ -54,13 +56,36 @@ services:
       PGUSER: postgres
       PGPASSWORD: postgres
       PGDATABASE: postgres
-      TILE_IDS: ${TILE_IDS:-8-688-40}
+      TILE_IDS: ${TILE_IDS-8-688-40}
       BAG3D_VERSION: ${BAG3D_VERSION:-v20250903}
     volumes:
       - 3dbag-data:/data
     depends_on:
       postgis:
         condition: service_healthy
+
+  import-footprints:
+    profiles: ['footprints']
+    build:
+      context: .
+      dockerfile: docker/3dbag-import/Dockerfile
+    entrypoint: ['/opt/footprints/import.sh']
+    command: ['/data/${FOOTPRINTS_FILE:-buildings.gpkg}']
+    environment:
+      PGHOST: postgis
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      SOURCE: ${FOOTPRINTS_SOURCE:-overture}
+      GROUND_HEIGHT: ${GROUND_HEIGHT:-0}
+    volumes:
+      - ./data:/data:ro
+    depends_on:
+      postgis:
+        condition: service_healthy
+      # both imports create the buildings table, so they run one after the other
+      import-3dbag:
+        condition: service_completed_successfully
 
   # stands in for metatile-queue-populator: one job per metatile area that has buildings
   seed:
@@ -81,6 +106,9 @@ services:
     depends_on:
       import-3dbag:
         condition: service_completed_successfully
+      import-footprints:
+        condition: service_completed_successfully
+        required: false
 
   tiler-tiles:
     <<: *tiler

@@ -5,8 +5,13 @@ set -euo pipefail
 
 DATA_DIR="${DATA_DIR:-/data}"
 BAG3D_VERSION="${BAG3D_VERSION:-v20250903}"
-TILE_IDS="${TILE_IDS:-8-688-40}"
+TILE_IDS="${TILE_IDS-8-688-40}"
 GRIDS=(nl_nsgi_rdtrans2018.tif nl_nsgi_nlgeo2018.tif)
+
+if [[ -z "${TILE_IDS// /}" ]]; then
+  echo "no 3DBAG tiles to import"
+  exit 0
+fi
 
 mkdir -p "$DATA_DIR/proj" "$DATA_DIR/3dbag"
 

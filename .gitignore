@@ -116,3 +116,7 @@ config/local*.json
 
 # default fs tiles storage
 tiles
+
+# footprint files for docker compose
+data/*
+!data/README.md
