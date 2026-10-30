@@ -4,13 +4,16 @@ A worker that turns 3D buildings stored in PostGIS into a world-wide [3D Tiles 1
 
 It follows [retiler](https://github.com/MapColonies/retiler): it consumes metatile jobs from a [pg-boss](https://github.com/timgit/pg-boss) queue filled by metatile-queue-populator, and writes tiles to storage. The design is in [docs/osm-3d-tiles-plan.md](docs/osm-3d-tiles-plan.md), and the milestones are in [docs/execution-plan.md](docs/execution-plan.md).
 
-![Valkenburg from 3DBAG in the viewer](docs/viewer.png)
+![Tel Aviv from Overture Maps footprints in the viewer](docs/viewer-tel-aviv.png)
+
+It takes two kinds of input, both stored in the same table in EPSG:4326: full 3D buildings (3DBAG, LoD 2.2), and 2D footprints with a height (any OGR file and CRS, e.g. Overture Maps or OpenStreetMap buildings), which are extruded at import.
 
 ## How it works
 
 ```mermaid
 flowchart LR
   A[3DBAG GeoPackage] -->|scripts/3dbag/import.sh| B[(PostGIS: buildings)]
+  F[2D footprints, e.g. EPSG:4326 GeoPackage] -->|scripts/footprints/import.sh| B
   P[metatile-queue-populator<br/>or the seed command] -->|metatile jobs| Q1[(pg-boss: 3dtiler-queue)]
   Q1 --> T[worker, APP_MODE=tiles]
   B --> T
@@ -40,6 +43,7 @@ Then open http://localhost:8080. Compose starts:
 | ---------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `postgis`        | PostGIS 16 with `postgis_sfcgal`                                                                                  |
 | `import-3dbag`   | Downloads the 3DBAG tiles in `TILE_IDS` and the Dutch PROJ grids, and imports them into `buildings`               |
+| `import-footprints` | Only with `--profile footprints`: imports the footprint file `./data/$FOOTPRINTS_FILE`                         |
 | `seed`           | Stands in for metatile-queue-populator: queues one job per metatile area that has buildings                       |
 | `tiler-tiles`    | The worker in `tiles` mode                                                                                         |
 | `tiler-subtrees` | The worker in `subtrees` mode, it also writes `tileset.json`                                                       |
@@ -49,7 +53,9 @@ Compose settings (environment variables or an `.env` file):
 
 | Variable                          | Default         | Description                                                    |
 | --------------------------------- | --------------- | -------------------------------------------------------------- |
-| `TILE_IDS`                        | `8-688-40`      | Space separated 3DBAG tile ids, from https://3dbag.nl/en/download |
+| `TILE_IDS`                        | `8-688-40`      | Space separated 3DBAG tile ids, from https://3dbag.nl/en/download. Empty imports none |
+| `FOOTPRINTS_FILE`                 | `buildings.gpkg` | The footprint file in `./data`, with `--profile footprints`   |
+| `GROUND_HEIGHT`                   | `0`             | The ellipsoidal ground height given to extruded footprints     |
 | `BAG3D_VERSION`                   | `v20250903`     | The 3DBAG release                                              |
 | `GEOMETRY_BUILDER`                | `node`          | `node` or `postgis`, see [Geometry builders](#geometry-builders) |
 | `METATILE_ZOOM` / `METATILE_SIZE` | `16` / `8`      | The seeded job shape                                           |
@@ -61,22 +67,30 @@ To process new data, import it and run the seed again:
 TILE_IDS="8-688-40 8-688-48" docker compose up import-3dbag seed
 ```
 
+To tile Tel Aviv from Overture Maps instead (EPSG:4326 footprints), extract it (see [Importing 2D footprints](#importing-2d-footprints)) into `./data`, then:
+
+```bash
+FOOTPRINTS_FILE=tel-aviv-buildings.gpkg TILE_IDS= docker compose --profile footprints up --build
+```
+
+and open http://localhost:8080/?lon=34.795&lat=32.075&range=1800.
+
 ### The viewer
 
 The viewer (`viewer/index.html`) uses CesiumJS with OpenStreetMap imagery, and needs no Cesium ion account. Click a building to see its properties. Query parameters:
 
 | Parameter              | Description                                                                                                    |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `lon`, `lat`, `range`  | The camera target and distance (defaults to the 3DBAG sample in Valkenburg)                                    |
+| `lon`, `lat`, `range`  | The camera target and distance (defaults to the 3DBAG sample in Valkenburg, use `?lon=34.795&lat=32.075&range=1800` for Tel Aviv) |
 | `heightOffset`         | Moves the tileset up or down, in meters                                                                        |
 | `ionToken`             | A Cesium ion token, to use Cesium World Terrain                                                                |
 | `tileset`              | The tileset URL (defaults to `tiles/tileset.json`)                                                             |
 
-Buildings stand at their real ellipsoidal height. Without terrain the globe is the bare WGS84 ellipsoid at 0 m, so they float above it by the height of the ground, about 115 to 175 m in Valkenburg. Use `?heightOffset=-120` to put them roughly on the map, or `?ionToken=...` to see them on Cesium World Terrain.
+Buildings stand at their real ellipsoidal height. Without terrain the globe is the bare WGS84 ellipsoid at 0 m, so 3DBAG buildings float above it by the height of the ground, about 115 to 175 m in Valkenburg. Use `?heightOffset=-120` to put them roughly on the map, or `?ionToken=...` to see them on Cesium World Terrain. Extruded footprints use `GROUND_HEIGHT` (0 by default), so they sit on the ellipsoid and show correctly without terrain, but not on a terrain.
 
 ## The buildings table
 
-The worker reads one table (`scripts/3dbag/buildings.sql`), one row per building part. Every source is loaded into it in **EPSG:4326, with Z as the height in meters above the WGS84 ellipsoid**:
+The worker reads one table (`scripts/buildings.sql`), one row per building part. Every source is loaded into it in **EPSG:4326, with Z as the height in meters above the WGS84 ellipsoid**:
 
 | Column                         | Type                            | Description                                                  |
 | ------------------------------ | ------------------------------- | ------------------------------------------------------------ |
@@ -98,6 +112,38 @@ PGHOST=localhost PGUSER=postgres PGDATABASE=postgres ./scripts/3dbag/import.sh 8
 ```
 
 The conversion needs the PROJ grids `nl_nsgi_rdtrans2018.tif` and `nl_nsgi_nlgeo2018.tif` from https://cdn.proj.org. Without the geoid grid, PROJ silently keeps NAP heights, and buildings end up about 43 m too low. The script checks a known point first and stops if the grids are missing.
+
+### Importing 2D footprints
+
+`scripts/footprints/import.sh` loads any footprint file `ogr2ogr` reads, in any CRS (converted to EPSG:4326). It then extrudes every polygon in SQL into a ground face, a roof face and one wall per edge, holes included, so footprints go through the same worker as 3DBAG:
+
+```bash
+PGHOST=localhost PGUSER=postgres PGDATABASE=postgres SOURCE=overture ./scripts/footprints/import.sh tel-aviv-buildings.gpkg buildings
+```
+
+The attributes are mapped with SQL expressions over the source row `f`. The defaults fit Overture Maps:
+
+| Variable                            | Default                                                    |
+| ----------------------------------- | ---------------------------------------------------------- |
+| `ID_EXPR`                           | `f.id`                                                     |
+| `HEIGHT_EXPR`                       | `coalesce(f.height, f.num_floors * $FLOOR_HEIGHT, $DEFAULT_HEIGHT)`, with 3 m and 9 m |
+| `MIN_HEIGHT_EXPR`                   | `f.min_height` (where a building part starts)              |
+| `ROOF_TYPE_EXPR`                    | `f.roof_shape`                                             |
+| `GROUND_HEIGHT`                     | `0`, the ellipsoidal height of the ground for every building |
+| `SOURCE`                            | `footprints`                                               |
+
+`GROUND_HEIGHT` is a single value until a DEM is sampled per building, which is the open terrain question.
+
+#### Getting EPSG:4326 buildings from Overture Maps
+
+[Overture Maps](https://overturemaps.org) publishes worldwide buildings in EPSG:4326 under ODbL (OpenStreetMap, Microsoft and Google footprints), with `height` and `num_floors` where known. `scripts/overture/extract_buildings.py` cuts a bounding box into a GeoPackage:
+
+```bash
+pip install duckdb
+python scripts/overture/extract_buildings.py --bbox 34.74,32.04,34.82,32.12 data/tel-aviv-buildings.gpkg
+```
+
+That box holds 31,281 buildings (91% from OpenStreetMap). Only about 13% have a height or a number of floors, so most get the default height.
 
 ## Geometry builders
 

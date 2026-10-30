@@ -10,7 +10,12 @@ This plan turns the [design plan](./osm-3d-tiles-plan.md) into milestones. It is
 
 ## Status
 
-M1 to M7 work end to end on a 3DBAG tile with `docker compose up` (see the [README](../README.md)). The output passes `3d-tiles-validator` with no errors or warnings, renders in Cesium, and building properties can be picked. Left: S3 storage, meshopt compression, Helm, and the OSM source.
+M1 to M7 work end to end with `docker compose up` (see the [README](../README.md)), on two sources:
+
+- **3DBAG** (LoD 2.2, EPSG:7415, converted to EPSG:4326).
+- **2D footprints in EPSG:4326**, e.g. 31,281 Tel Aviv buildings from Overture Maps, extruded at import (`scripts/footprints`).
+
+The output passes `3d-tiles-validator` with no errors or warnings, renders in Cesium, and building properties can be picked. The densest Tel Aviv z15 tile is 0.94 MB uncompressed, which meets the design's Tel Aviv gate. Left: S3 storage, meshopt compression, Helm, per-building ground heights from a DEM, and the OSM source.
 
 ---
 
