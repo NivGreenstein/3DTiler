@@ -19,7 +19,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          setupFiles: ['./tests/configurations/initJestOpenapi.setup.ts', './tests/configurations/vite.setup.ts'],
+          setupFiles: ['./tests/configurations/vite.setup.ts'],
           include: ['tests/unit/**/*.spec.ts'],
           environment: 'node',
         },
@@ -30,7 +30,7 @@ export default defineConfig({
       {
         test: {
           name: 'integration',
-          setupFiles: ['./tests/configurations/initJestOpenapi.setup.ts', './tests/configurations/vite.setup.ts'],
+          setupFiles: ['./tests/configurations/vite.setup.ts'],
           include: ['tests/integration/**/*.spec.ts'],
           environment: 'node',
         },

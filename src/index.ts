@@ -1,26 +1,68 @@
 // this import must be called before the first import of tsyringe
 import 'reflect-metadata';
 import { createServer } from 'node:http';
-import { createTerminus } from '@godaddy/terminus';
+import express from 'express';
+import type { Registry } from 'prom-client';
 import type { Logger } from '@map-colonies/js-logger';
-import { SERVICES } from '@common/constants';
+import type { DependencyContainer } from 'tsyringe';
+import type { CleanupRegistry } from '@map-colonies/cleanup-registry';
+import { collectMetricsExpressMiddleware } from '@map-colonies/prometheus';
+import type { HealthCheck } from '@godaddy/terminus';
+import { createTerminus } from '@godaddy/terminus';
+import { CONSUME_AND_PROCESS_FACTORY, ExitCodes, HEALTHCHECK, METRICS_REGISTRY, ON_SIGNAL, SERVICES } from '@common/constants';
 import type { ConfigType } from '@common/config';
-import { getApp } from './app';
+import { registerExternalValues } from './containerConfig';
 
-void getApp()
-  .then(([app, container]) => {
-    const logger = container.resolve<Logger>(SERVICES.LOGGER);
+let depContainer: DependencyContainer | undefined;
+
+void registerExternalValues()
+  .then(async (container) => {
+    depContainer = container;
+
     const config = container.resolve<ConfigType>(SERVICES.CONFIG);
+    const cleanupRegistry = container.resolve<CleanupRegistry>(SERVICES.CLEANUP_REGISTRY);
+    const registry = container.resolve<Registry | undefined>(METRICS_REGISTRY);
+    const healthCheck = container.resolve<HealthCheck>(HEALTHCHECK);
+
+    const app = express();
+
+    if (registry !== undefined) {
+      app.use('/metrics', collectMetricsExpressMiddleware({ registry, labels: { project: config.get('app.project.name') } }));
+    }
+
+    const server = createTerminus(createServer(app), { healthChecks: { '/liveness': healthCheck }, onSignal: container.resolve(ON_SIGNAL) });
+
+    cleanupRegistry.register({
+      func: async () => {
+        return new Promise((resolve) => {
+          server.once('close', resolve);
+          server.close();
+        });
+      },
+    });
+
     const port = config.get('server.port');
-    const stubHealthCheck = async (): Promise<void> => Promise.resolve();
-    const server = createTerminus(createServer(app), { healthChecks: { '/liveness': stubHealthCheck }, onSignal: container.resolve('onSignal') });
+
+    const logger = container.resolve<Logger>(SERVICES.LOGGER);
 
     server.listen(port, () => {
-      logger.info(`app started on port ${port}`);
+      logger.debug(`liveness on port ${port}`);
     });
+
+    const consumeAndProcess = container.resolve<() => Promise<void>>(CONSUME_AND_PROCESS_FACTORY);
+    await consumeAndProcess();
   })
-  .catch((error: Error) => {
-    console.error('😢 - failed initializing the server');
-    console.error(error);
-    process.exit(1);
+  .catch(async (error: Error) => {
+    const errorLogger =
+      depContainer?.isRegistered(SERVICES.LOGGER) === true
+        ? depContainer.resolve<Logger>(SERVICES.LOGGER).error.bind(depContainer.resolve<Logger>(SERVICES.LOGGER))
+        : console.error;
+    errorLogger({ msg: 'an unexpected error occurred', err: error });
+
+    if (depContainer?.isRegistered(ON_SIGNAL) === true) {
+      const shutDown: () => Promise<void> = depContainer.resolve(ON_SIGNAL);
+      await shutDown();
+    }
+
+    process.exit(ExitCodes.GENERAL_ERROR);
   });

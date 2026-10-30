@@ -1,0 +1,158 @@
+# A local 3DTiler stack: PostGIS with a 3DBAG tile, seeded metatile jobs instead of metatile-queue-populator, the tile and subtree
+# workers, and a Cesium viewer on http://localhost:8080.
+#   docker compose up --build
+# Settings (environment variables or an .env file): TILE_IDS, BAG3D_VERSION, GEOMETRY_BUILDER (node or postgis), METATILE_ZOOM,
+# METATILE_SIZE, VIEWER_PORT, and FOOTPRINTS_FILE, OVERTURE_BBOX with the footprints profile.
+# The footprints profile also tiles 2D footprints in EPSG:4326: ./data/$FOOTPRINTS_FILE, downloaded from Overture Maps for
+# OVERTURE_BBOX (Tel Aviv by default) when it is missing:
+#   docker compose --profile footprints up --build
+
+x-tiler: &tiler
+  build: .
+  image: 3dtiler:local
+  restart: unless-stopped
+  environment: &tiler-environment
+    DB_HOST: postgis
+    DB_PORT: 5432
+    DB_USERNAME: postgres
+    DB_PASSWORD: postgres
+    DB_NAME: postgres
+    DB_SCHEMA: public
+    PGBOSS_HOST: postgis
+    PGBOSS_USERNAME: postgres
+    PGBOSS_PASSWORD: postgres
+    PGBOSS_NAME: postgres
+    TILES_STORAGE_FS_BASE_PATH: /tiles
+    TILING_GEOMETRY_BUILDER: ${GEOMETRY_BUILDER:-node}
+    QUEUE_WAIT_TIMEOUT: 2000
+    LOG_LEVEL: info
+  volumes:
+    - tiles:/tiles
+  depends_on:
+    postgis:
+      condition: service_healthy
+
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '${POSTGIS_PORT:-5432}:5432'
+    volumes:
+      - postgis:/var/lib/postgresql/data
+      - ./docker/postgis/20_sfcgal.sql:/docker-entrypoint-initdb.d/20_sfcgal.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  import-3dbag:
+    build:
+      context: .
+      dockerfile: docker/3dbag-import/Dockerfile
+    environment:
+      PGHOST: postgis
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      TILE_IDS: ${TILE_IDS-8-688-40}
+      BAG3D_VERSION: ${BAG3D_VERSION:-v20250903}
+    volumes:
+      - 3dbag-data:/data
+    depends_on:
+      postgis:
+        condition: service_healthy
+
+  # downloads Overture Maps buildings for OVERTURE_BBOX into ./data/$FOOTPRINTS_FILE, unless the file is already there
+  extract-overture:
+    profiles: ['footprints']
+    image: python:3.12-slim
+    entrypoint: ['sh', '-c']
+    command:
+      - >-
+        if [ -f "/data/$$FOOTPRINTS_FILE" ]; then echo "using /data/$$FOOTPRINTS_FILE"; else
+        pip install --quiet --root-user-action=ignore duckdb &&
+        python /scripts/extract_buildings.py --bbox "$$OVERTURE_BBOX" "/data/$$FOOTPRINTS_FILE"; fi
+    environment:
+      FOOTPRINTS_FILE: ${FOOTPRINTS_FILE:-tel-aviv-buildings.gpkg}
+      OVERTURE_BBOX: ${OVERTURE_BBOX:-34.74,32.04,34.82,32.12}
+    volumes:
+      - ./data:/data
+      - ./scripts/overture:/scripts:ro
+
+  import-footprints:
+    profiles: ['footprints']
+    build:
+      context: .
+      dockerfile: docker/3dbag-import/Dockerfile
+    entrypoint: ['/opt/footprints/import.sh']
+    command: ['/data/${FOOTPRINTS_FILE:-tel-aviv-buildings.gpkg}']
+    environment:
+      PGHOST: postgis
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      SOURCE: ${FOOTPRINTS_SOURCE:-overture}
+      GROUND_HEIGHT: ${GROUND_HEIGHT:-0}
+    volumes:
+      - ./data:/data:ro
+    depends_on:
+      postgis:
+        condition: service_healthy
+      # both imports create the buildings table, so they run one after the other
+      import-3dbag:
+        condition: service_completed_successfully
+      extract-overture:
+        condition: service_completed_successfully
+
+  # stands in for metatile-queue-populator: one job per metatile area that has buildings
+  seed:
+    <<: *tiler
+    restart: 'no'
+    command:
+      [
+        'dumb-init',
+        'node',
+        '--import',
+        './instrumentation.mjs',
+        './cli/seed.js',
+        '--zoom',
+        '${METATILE_ZOOM:-16}',
+        '--metatile',
+        '${METATILE_SIZE:-8}',
+      ]
+    depends_on:
+      import-3dbag:
+        condition: service_completed_successfully
+      import-footprints:
+        condition: service_completed_successfully
+        required: false
+
+  tiler-tiles:
+    <<: *tiler
+    environment:
+      <<: *tiler-environment
+      APP_MODE: tiles
+      APP_PARALLELISM: 2
+
+  tiler-subtrees:
+    <<: *tiler
+    environment:
+      <<: *tiler-environment
+      APP_MODE: subtrees
+
+  viewer:
+    image: nginx:1.27-alpine
+    ports:
+      - '${VIEWER_PORT:-8080}:80'
+    volumes:
+      - ./viewer:/usr/share/nginx/html:ro
+      - ./docker/viewer/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - tiles:/usr/share/nginx/tiles:ro
+
+volumes:
+  postgis:
+  3dbag-data:
+  tiles:

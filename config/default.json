@@ -1,12 +1,9 @@
 {
-  "openapiConfig": {
-    "filePath": "./openapi3.yaml",
-    "basePath": "/docs",
-    "rawPath": "/api",
-    "uiPath": "/api"
-  },
   "telemetry": {
-    "metrics": {},
+    "metrics": {
+      "enabled": true,
+      "buckets": [0.1, 0.5, 1, 5, 15, 50, 250, 500]
+    },
     "tracing": {
       "isEnabled": false
     },
@@ -20,17 +17,57 @@
     }
   },
   "server": {
-    "port": 8080,
-    "request": {
-      "payload": {
-        "limit": "1mb"
+    "port": 8080
+  },
+  "app": {
+    "project": {
+      "name": "default"
+    },
+    "mode": "tiles",
+    "queueName": "3dtiler-queue",
+    "parallelism": 1,
+    "subtrees": {
+      "queueName": "3dtiler-subtrees"
+    },
+    "jobQueue": {
+      "waitTimeout": 5000,
+      "pgBoss": {
+        "host": "localhost",
+        "port": 5432,
+        "username": "postgres",
+        "password": "postgres",
+        "schema": "pgboss",
+        "ssl": {
+          "enabled": false
+        },
+        "database": "postgres",
+        "supervisor": true,
+        "healthCheckTimeoutMs": 5000
       }
     },
-    "response": {
-      "compression": {
-        "enabled": true,
-        "options": null
-      }
+    "tiling": {
+      "contentLevels": [14, 15],
+      "subtreeLevels": 8,
+      "geometryBuilder": "node",
+      "rootGeometricError": 800000,
+      "minHeight": -500,
+      "maxHeight": 6000
+    },
+    "tilesStorage": {
+      "kind": "fs",
+      "basePath": "./tiles"
     }
+  },
+  "db": {
+    "host": "localhost",
+    "port": 5432,
+    "username": "postgres",
+    "password": "postgres",
+    "ssl": {
+      "enabled": false
+    },
+    "database": "postgres",
+    "schema": "public",
+    "healthCheckTimeoutMs": 5000
   }
 }
